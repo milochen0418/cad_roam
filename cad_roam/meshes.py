@@ -16,14 +16,16 @@ once and the triangles as indices into them, gzipped (about a fifth of the STL),
     48      ...   f32 x 3 per corner, then the indices (u16 or u32), padded to 4 bytes
 
 Coordinates stay in the model's units and axes; the browser scales and stands the model up
-(:mod:`cad_roam.models` says how). A model with more than ``CAD_ROAM_MAX_TRIANGLES`` triangles is
+(:mod:`cad_roam.models` says how). An STL with more than ``CAD_ROAM_MAX_TRIANGLES`` triangles is
 simplified first (corners closer than a grid cell are merged).
 
-A GLB (glTF 2.0, binary) is sent gzipped as it is: three.js reads it in the browser, with each
-part's colour and its see-through parts (Codoc in CAD writes ``model.glb`` next to ``model.stl``,
-in the same units; the Sagrada Família's is 50 MB, 6.4 MB gzipped). Here it is only read for its
-size (:func:`glb_box`); glTF's Y up is the model's Z up again: glTF's (x, y, z) is the model's
-(x, -z, y). A GLB that needs a glTF extension (compressed meshes, ...) isn't used.
+A GLB (glTF 2.0, binary) is sent gzipped as it is, however many triangles it has (the browser asks
+first when it has more than ``CAD_ROAM_MAX_TRIANGLES``: :func:`cad_roam.models.big`): three.js
+reads it in the browser, with each part's colour and its see-through parts (Codoc in CAD writes
+``model.glb`` next to ``model.stl``, in the same units; the Sagrada Família's was 50 MB, 6.4 MB
+gzipped, at 2.3 million triangles, and 99 MB, 9.3 MB gzipped, at 4.7 million). Here it is only
+read for its size (:func:`glb_box`); glTF's Y up is the model's Z up again: glTF's (x, y, z) is
+the model's (x, -z, y). A GLB that needs a glTF extension (compressed meshes, ...) isn't used.
 
 The files are cached under ``CAD_ROAM_HOME/meshes/<collection>/<owner>/<item>/`` (a GLB's in
 ``glb/`` there) as ``<stamp>.rmsh.gz`` or ``<stamp>.glb.gz``; ``stamp`` changes whenever the

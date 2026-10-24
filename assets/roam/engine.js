@@ -20,9 +20,14 @@ import { Input } from "./input.js";
 import { Look } from "./look.js";
 import { People } from "./people.js";
 import { FLY, Player, WALK } from "./player.js";
-import { Thing, needsRebuild } from "./things.js";
+import { BYTES_PER_TRIANGLE, Thing, needsRebuild } from "./things.js";
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+// A model with more triangles than the server's limit (its "big", cad_roam/models.py) loads only
+// once the person said so. Asked once in a page: model key -> true (load it, and its later builds)
+// or false (leave its outline, with a button to load it after all).
+const BIG = new Map();
 
 // The sun crosses the sky along its path on a day in spring or autumn (an equinox) at 41° N,
 // Barcelona's: up in the east at 6:00, highest (49°) in the south at noon, down in the west at
@@ -113,7 +118,7 @@ export class Engine {
       onFollow: (id) => this.follow(id),
       onStick: (x, y, id) => this.input.setStick(x, y, id),
       onRise: (v) => { this.input.touchRise = v; },
-      onAction: (a) => this._action(a),
+      onAction: (a, d) => this._action(a, d),
       sunTimes: SUN_TIMES,
       onSunTime: (t) => this.setTime(t),
     });
@@ -294,6 +299,7 @@ export class Engine {
         // The model was deleted (in Codoc in CAD or on the storage page).
         for (const t of this.things.values()) t.dispose();
         this.things.clear();
+        this.hud.closeBig();
         this._emit({ type: "gone" });
         return;
       }
@@ -359,6 +365,7 @@ export class Engine {
       if (!seen.has(key)) {
         thing.dispose();
         this.things.delete(key);
+        this.hud.closeBig(key);
         const prev = this.replacing.get(key);
         if (prev) prev.dispose(), this.replacing.delete(key);
       }
@@ -390,7 +397,7 @@ export class Engine {
     this.scene.fog.far = Math.max(6000, size * 14);
   }
 
-  // Loads models nearest first, a couple at a time.
+  // Loads models nearest first, a couple at a time; big ones once the person said so.
   _schedule() {
     const loading = [...this.things.values()].filter((t) => t.status === "loading").length;
     let free = LOADS_AT_ONCE - loading;
@@ -400,9 +407,38 @@ export class Engine {
       .filter((t) => t.status === "waiting")
       .sort((a, b) => a.bounds.distanceToPoint(p) - b.bounds.distanceToPoint(p));
     for (const t of waiting) {
+      if (t.data.big && BIG.get(t.key) !== true) {
+        this._askBig(t);
+        continue;
+      }
       if (free-- <= 0) break;
       t.load();
     }
+  }
+
+  // A model over the server's triangle limit: what loading it costs, and load it or not (hud.js).
+  _askBig(thing) {
+    if (BIG.get(thing.key) === false) {
+      this._skip(thing);
+      return;
+    }
+    const t = thing.data;
+    this.input.unlock();
+    this.hud.askBig(
+      { key: t.key, mesh: t.mesh, title: t.title, tris: t.tris, limit: t.big.limit, bytes: t.big.bytes, memory: t.tris * BYTES_PER_TRIANGLE },
+      (load) => {
+        BIG.set(thing.key, load);
+        this._schedule();
+      },
+    );
+  }
+
+  // Not loaded: its outline stays (or its last build, when this is a newer one), and the HUD
+  // offers to load it after all.
+  _skip(thing) {
+    thing.status = "skipped";
+    if (!this.replacing.has(thing.key)) thing.setNote(this.hud.t("not_loaded", "not loaded"));
+    this._loadingChanged = true;
   }
 
   _loaded(thing) {
@@ -520,6 +556,15 @@ export class Engine {
     } else if (a === "respawn") {
       const key = this.worldData && this.worldData.spawn;
       if (key) this.goto(key);
+    } else if (a === "load_big") {
+      // A big model left unloaded: loaded after all (the HUD's button).
+      BIG.set(d, true);
+      const thing = this.things.get(d);
+      if (thing && thing.status === "skipped") {
+        thing.status = "waiting";
+        thing.setNote("");
+        this._schedule();
+      }
     } else if (a === "locked") {
       // The key list stays up until you first look around; H shows it again.
       this.hud.setLocked(true);
@@ -569,6 +614,7 @@ export class Engine {
     this.labels = labels || {};
     this.hud.setLabels(this.labels);
     this.hud.setMode(this.player.mode, this.player.ghost, this.light);
+    this._loadingChanged = true;
   }
 
   // ------------------------------------------------------------------ the frame
@@ -634,7 +680,9 @@ export class Engine {
     }
     if (this._loadingChanged) {
       this._loadingChanged = false;
-      const rows = [...this.things.values()].filter((t) => t.status === "loading").map((t) => ({ title: t.data.title, progress: t.progress }));
+      const rows = [...this.things.values()]
+        .filter((t) => t.status === "loading" || t.status === "skipped")
+        .map((t) => ({ key: t.key, title: t.data.title, progress: t.progress, skipped: t.status === "skipped", newer: this.replacing.has(t.key) }));
       this.hud.setLoading(rows);
     }
     this.hud.drawMap(p, this.things.values(), this.peopleList, (this.opts.me || {}).peer);

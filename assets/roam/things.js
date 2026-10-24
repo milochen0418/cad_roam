@@ -15,6 +15,12 @@ const STONES = [0xefe9df, 0xe7dcc6, 0xdcc9a7, 0xd9e2d4, 0xdde1e6, 0xeadad3];
 const PAVING = 0xd8d2c4;
 const PEDESTAL = 0x3b3f46;
 
+// About how much memory a model takes in the browser per triangle while it loads: the GLB, its
+// merged geometry, its BVH and the GPU's copy (the Sagrada Família's 4.7 million triangles added
+// 680 to 860 MB to Chromium's processes on an M4 Mac, shadows on). What people are told before a
+// big model loads (engine.js).
+export const BYTES_PER_TRIANGLE = 180;
+
 function hash(text) {
   let h = 2166136261;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
@@ -160,7 +166,7 @@ export class Thing {
       new THREE.Vector3(data.x - fw, 0, data.z - fd),
       new THREE.Vector3(data.x + fw, data.base + Math.max(data.h, 0.05), data.z + fd),
     );
-    this.status = "waiting"; // "waiting" | "loading" | "ready" | "failed"
+    this.status = "waiting"; // "waiting" | "loading" | "ready" | "failed" | "skipped" (big, not wanted)
     this.progress = 0;
     this.parts = 0; // once loaded: its materials (1 for an STL), and how many are glass
     this.glass = 0;
@@ -356,7 +362,7 @@ export class Thing {
 
 // Changes that need the thing built again (the rest is only words).
 export function needsRebuild(a, b) {
-  for (const k of ["mesh", "unit", "x", "z", "w", "d", "h", "base", "pedestal", "title"]) {
+  for (const k of ["mesh", "unit", "x", "z", "w", "d", "h", "base", "pedestal", "title", "big"]) {
     if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) return true;
   }
   return false;

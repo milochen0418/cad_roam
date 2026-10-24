@@ -1,6 +1,7 @@
 // What is drawn over the 3D view: the crosshair and what it points at, walk / drone and the
-// drone's readings, the sun's time, the keys, models still loading, the map, the people here (a
-// click flies to them) and, on touch screens, a stick and buttons.
+// drone's readings, the sun's time, the keys, models still loading (or left unloaded), the
+// question before a big model loads, the map, the people here (a click flies to them) and, on
+// touch screens, a stick and buttons.
 
 import { initials } from "./people.js";
 
@@ -10,6 +11,14 @@ function el(tag, cls, parent, text) {
   if (text !== undefined) e.textContent = text;
   if (parent) parent.appendChild(e);
   return e;
+}
+
+// Bytes as people read them: "22 KB", "9.3 MB", "710 MB", "1.4 GB".
+function bytes(n) {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n < 1e6) return `${Math.max(1, Math.round(n / 1e3))} KB`;
+  const mb = n / 1e6;
+  return mb >= 10 ? `${Number(mb.toPrecision(2))} MB` : `${mb.toFixed(1)} MB`;
 }
 
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -56,7 +65,32 @@ export class Hud {
     this.people = el("div", "rm-people", this.root);
     this.people.addEventListener("pointerdown", (e) => e.stopPropagation());
     this.onFollow = onFollow;
+    this.onAction = onAction;
     this.notice = el("div", "rm-notice", this.root);
+
+    // Before a big model loads (askBig): what it costs, load it or not.
+    this.ask = el("div", "rm-ask", this.root);
+    this.ask.setAttribute("role", "dialog");
+    this.ask.setAttribute("aria-modal", "true");
+    this.ask.setAttribute("aria-labelledby", "rm-ask-title");
+    this.ask.addEventListener("pointerdown", (e) => e.stopPropagation());
+    const box = el("div", "rm-ask-box", this.ask);
+    this.askTitle = el("h2", "rm-ask-title", box);
+    this.askTitle.id = "rm-ask-title";
+    this.askBody = el("p", "rm-ask-body", box);
+    this.askCosts = el("dl", "rm-ask-costs", box);
+    this.askWarn = el("p", "rm-ask-warn", box);
+    const buttons = el("div", "rm-ask-btns", box);
+    this.askSkip = el("button", "rm-ask-btn", buttons);
+    this.askLoad = el("button", "rm-ask-btn is-main", buttons);
+    this.askSkip.type = this.askLoad.type = "button";
+    this.askSkip.id = "rm-big-skip";
+    this.askLoad.id = "rm-big-load";
+    this.askSkip.addEventListener("click", () => this._answerBig(false));
+    this.askLoad.addEventListener("click", () => this._answerBig(true));
+    this.askLater = el("p", "rm-ask-later", box);
+    this._big = null;
+    this._bigAnswer = null;
 
     if (touch) this._touch(onStick, onRise, onAction);
     this.root.classList.toggle("is-touch", !!touch);
@@ -94,6 +128,52 @@ export class Hud {
       el("kbd", "", grid, k);
       el("span", "", grid, v);
     }
+    this._fillBig();
+  }
+
+  // A model with more triangles than the server's limit ({key, mesh, title, tris, limit, bytes,
+  // memory}): what loading it costs, and two buttons; answer(true | false) when one is pressed.
+  // Asked again about the same build, only answer is replaced.
+  askBig(big, answer) {
+    this._bigAnswer = answer;
+    if (this._big && this._big.key === big.key && this._big.mesh === big.mesh) return;
+    this._big = big;
+    this._fillBig();
+    this.root.classList.add("is-asking");
+  }
+
+  // Takes the question away (its model is gone); with a key, only when it is about that model.
+  closeBig(key) {
+    if (!this._big || (key && this._big.key !== key)) return;
+    this._big = this._bigAnswer = null;
+    this.root.classList.remove("is-asking");
+  }
+
+  _answerBig(load) {
+    const answer = this._bigAnswer;
+    this.closeBig();
+    if (answer) answer(load);
+  }
+
+  _fillBig() {
+    const b = this._big;
+    if (!b) return;
+    const times = b.tris / b.limit;
+    this.askTitle.textContent = this.t("big_title", "This model is big");
+    this.askBody.textContent = this.t("big_body", "{title} has {tris} triangles, {times} times the suggested limit of {limit}.")
+      .replace("{title}", b.title)
+      .replace("{tris}", b.tris.toLocaleString("en-US"))
+      .replace("{times}", times < 10 ? times.toFixed(1) : String(Math.round(times)))
+      .replace("{limit}", b.limit.toLocaleString("en-US"));
+    this.askCosts.innerHTML = "";
+    for (const [key, fallback, n] of [["big_download", "Download", b.bytes], ["big_memory", "Memory", b.memory]]) {
+      el("dt", "", this.askCosts, this.t(key, fallback));
+      el("dd", "", this.askCosts, this.t("big_about", "about {n}").replace("{n}", bytes(n)));
+    }
+    this.askWarn.textContent = this.t("big_warn", "A phone or an older computer may get very slow, or the tab may crash.");
+    this.askSkip.textContent = this.t("big_skip", "Don't load");
+    this.askLoad.textContent = this.t("big_load", "Load it");
+    this.askLater.textContent = this.t("big_later", "Not loaded, it can still be loaded from the top left.");
   }
 
   setMode(mode, ghost, light) {
@@ -149,11 +229,24 @@ export class Hud {
     this.target.classList.add("is-on");
   }
 
+  // Models loading, with their progress, and big ones left unloaded, with a button to load them.
   setLoading(rows) {
     this.loading.innerHTML = "";
     for (const r of rows) {
       const row = el("div", "rm-loading-row", this.loading);
       el("span", "rm-loading-name", row, r.title);
+      if (r.skipped) {
+        el("span", "rm-loading-note", row, r.newer ? this.t("big_newer", "its new build isn't loaded") : this.t("not_loaded", "not loaded"));
+        const load = el("button", "rm-loading-btn", row, this.t("big_load", "Load it"));
+        load.type = "button";
+        load.id = "rm-big-later";
+        load.addEventListener("pointerdown", (e) => e.stopPropagation());
+        load.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.onAction("load_big", r.key);
+        });
+        continue;
+      }
       const bar = el("span", "rm-loading-bar", row);
       el("i", "", bar).style.width = `${Math.round(r.progress * 100)}%`;
     }

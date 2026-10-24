@@ -109,11 +109,25 @@ def test_a_model_with_colours_is_drawn_from_its_glb(root):
     assert s["mesh"].endswith(f"?v={meshes.stamp(source)}") and (s["w"], s["h"]) == (250.0, 170.0)
 
 
-def test_a_glb_it_cant_draw_leaves_the_stl(root, monkeypatch):
+def test_a_glb_it_cant_draw_leaves_the_stl(root):
     bad = glb_bytes([(box_triangles(10, 10, 10), (1, 0, 0, 1))], required=("EXT_meshopt_compression",))
     publish_model(root, "draco00001", CATHEDRAL, (10, 10, 10), glb=bad)
     assert models.look(models.item("cad/draco00001"))[0].name == "model.stl"
-    # Nor one with more triangles than CAD Roam draws (its STL is simplified instead).
+
+
+def test_a_big_glb_is_still_drawn_but_asked_about_first(root, monkeypatch):
+    # More triangles than CAD_ROAM_MAX_TRIANGLES: still its GLB, in its colours, with what the
+    # browser tells before loading it (the limit, the gzipped GLB's size).
     publish_model(root, "huge000001", CATHEDRAL, (10, 10, 10), glb=glb_bytes([(box_triangles(10, 10, 10), (1, 0, 0, 1))]))
+    publish_model(root, "huge000002", CATHEDRAL, (10, 10, 10))
+    small = only(models.build("cad/huge000001"))
+    assert small["big"] is None and small["tris"] == 12
     monkeypatch.setattr(meshes, "MAX_TRIANGLES", 6)
-    assert models.look(models.item("cad/huge000001"))[0].name == "model.stl"
+    it = models.item("cad/huge000001")
+    source, _ = models.look(it)
+    assert source.name == "model.glb"
+    t = only(models.build("cad/huge000001"))
+    gz = meshes.mesh_file(models.COLLECTION, it.owner, it.id, source)
+    assert t["big"] == {"limit": 6, "bytes": gz.stat().st_size} and t["tris"] == 12
+    # An STL that big is simplified to the limit instead: nothing to ask.
+    assert only(models.build("cad/huge000002"))["big"] is None

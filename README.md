@@ -33,6 +33,7 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
 **In its colours**
 - A model built in Codoc in CAD since it has colours shows each part in its colour: the build writes a GLB beside the STL, and CAD Roam draws that. Models built before, and STL files imported on the storage page, are drawn in one stone colour (press Run in Codoc in CAD to get the colours).
 - See-through parts (a colour with an alpha, like `("#2f6fd6", 0.55)`) are glass. From inside, a stained-glass window shows the sky in its colour and glows when the sun is behind it; the sunlight that comes through it falls in its colour on whatever it reaches, its pattern cut by the stone round it.
+- **Big models ask first.** A model in its colours with more triangles than `CAD_ROAM_MAX_TRIANGLES` (3 million) loads only once you say so: a question tells how many triangles it has (and how many times the limit), how much it downloads and about how much memory it takes (the Sagrada Família at 4.7 million: 9.3 MB, about 850 MB). **Load it** draws it in its colours; **Don't load** leaves its outline, with **Load it** at the top left for later. The answer holds while the page is open, for the model's next builds too; a new page asks again.
 - **The sun's time**: drag the ☀ slider under Walk / Drone from 6:30 to 17:30, and the sun crosses the sky as it does on a spring or autumn day at Barcelona's latitude: up in the east, 49° high in the south at noon, down in the west, warmer and with a dimmer sky when it is low. **T** jumps to 7:30, 10:30 and 16:30. 10:30 is where you arrive: the sun behind you, a little to the east (+X is east, the front of a model faces south). Your browser keeps the time you leave it at. The Sagrada Família's Nativity side (+X) has the cool windows, lit in the morning, its Passion side the warm ones, lit in the afternoon, as in the real church.
 - Under a roof, less of the sky's light gets in, so insides are dimmer than outside and their windows' light shows. These lights need *Best (shadows)*; *Fast* shows the colours and the glass only.
 
@@ -65,7 +66,7 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
                                           /data/collections/cad-models/by-app/cad/<id>/   (re-ddns mounts)
 ```
 
-- **Meshes.** A model is drawn from the GLB its build wrote beside the STL (Codoc in CAD's `model.glb`, each part in its colour), sent gzipped as it is (the Sagrada Família's: 50 MB, 6.4 MB gzipped, 2.3 million triangles); three.js reads it and makes one mesh per colour. Without a GLB, from the STL, which writes every corner of every triangle out (70 MB for an older Sagrada Família, 1.4 million triangles): `cad_roam/meshes.py` sends each corner once and the triangles as indices, gzipped (9 MB). Either is made once per build and cached in `CAD_ROAM_HOME` under the file's size and time, so a rebuilt model gets a new URL and browsers cache the rest for good. STLs over `CAD_ROAM_MAX_TRIANGLES` (3 million) are simplified first; a GLB over it, or one that needs a glTF extension, isn't used (the STL is).
+- **Meshes.** A model is drawn from the GLB its build wrote beside the STL (Codoc in CAD's `model.glb`, each part in its colour), sent gzipped as it is (the Sagrada Família's: 50 MB, 6.4 MB gzipped, 2.3 million triangles); three.js reads it and makes one mesh per colour. Without a GLB, from the STL, which writes every corner of every triangle out (70 MB for an older Sagrada Família, 1.4 million triangles): `cad_roam/meshes.py` sends each corner once and the triangles as indices, gzipped (9 MB). Either is made once per build and cached in `CAD_ROAM_HOME` under the file's size and time, so a rebuilt model gets a new URL and browsers cache the rest for good. STLs over `CAD_ROAM_MAX_TRIANGLES` (3 million) are simplified first; a GLB over it is sent as it is once the person agrees (the place says `big`: the limit and the gzipped size, so the browser can ask), and one that needs a glTF extension isn't used (the STL is).
 - **Glass and light** (`assets/roam/look.js`). A part whose colour has an alpha is drawn twice after the rest: once multiplying what is behind it by its colour, once adding its reflections and the sun shining through it. Each frame the glass is also drawn from the sun into a small picture of its colours and depth; surfaces look it up next to their shadow, and those behind glass from the sun get its colour. A picture of the model from straight above, made when it loads, tells which surfaces are under a roof: they get half the sky's light.
 - **Collisions** use [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh): the model gets a bounding-volume tree when it loads; the walker is a capsule, the drone a sphere. three.js and three-mesh-bvh are npm packages bundled by Reflex's Vite (`lib_dependencies`), so nothing comes from a CDN at run time.
 - **Coordinates.** A model's Z is up and its front is -Y (Codoc in CAD's "Front" view); you arrive facing its front, and it stands on the ground at its own z = 0, scaled by its unit.
@@ -91,14 +92,14 @@ Open `http://localhost:3000`. On a Mac it reads the same shared folder the local
 | Variable | Default | Meaning |
 |---|---|---|
 | `CAD_ROAM_HOME` | `~/Library/Application Support/cad_roam` (macOS), `~/.local/share/cad_roam` | Meshes made from models, and the sizes people chose |
-| `CAD_ROAM_MAX_TRIANGLES` | `3000000` | Bigger models are simplified to this many triangles (and drawn without their colours) |
+| `CAD_ROAM_MAX_TRIANGLES` | `3000000` | A model in its colours with more triangles asks before it loads; a bigger STL is simplified to this many |
 | `CAD_ROAM_CALL_APP` | (chosen when calling) | The call app every call uses |
 | `DDNS_COLLECTIONS_ROOT` | set by re-ddns | Where the collections are |
 
 ## 🧪 Tests
 
 ```bash
-poetry run pytest                              # 33 unit tests: units, meshes and GLBs, models, links, presence, routes
+poetry run pytest                              # 34 unit tests: units, meshes and GLBs, models, links, presence, routes
 poetry run ./run_test_suite.sh smoke_home      # E2E (Playwright), see testcases/README.md
 ```
 
@@ -109,6 +110,7 @@ The E2E suites build their own small `cad-models` collection (`testcases/fixture
 - **A model is tiny or huge.** Details says what size CAD Roam uses and why; choose one, or add `# 1 unit = 1 m` to its code.
 - **"Not built yet".** The model has no STL: open it in Codoc in CAD and press Run.
 - **All one colour.** It was last built before Codoc in CAD wrote colours: press Run there once.
+- **Only an outline, "not loaded".** The model is big and you chose *Don't load*: press **Load it** at the top left, or open the page again.
 - **No light through the windows.** Move the sun (the ☀ slider, or T) to where the windows face: the east ones in the morning, the west ones in the afternoon. At 10:30 it is high in the south-east. And choose *Best (shadows)*.
 - **Slow.** Pick *Fast (no shadows)* in the top bar. Browsers without a GPU draw 3D in software.
 - **The mouse doesn't turn the view.** Click the view once (Esc gives the mouse back), or drag.

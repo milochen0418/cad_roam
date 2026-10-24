@@ -45,6 +45,14 @@ if [[ -z "${CAD_ROAM_HOME:-}" ]]; then
   rm -rf "$CAD_ROAM_HOME"
 fi
 export DDNS_APP_ID="${DDNS_APP_ID:-cad-roam}"
+# A suite's own server settings: KEY=value lines in testcases/<suite>/server.env (e.g. a lower
+# triangle limit).
+if [[ -f "$SUITE_DIR/server.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$SUITE_DIR/server.env"
+  set +a
+fi
 
 run_in_poetry_env() {
   if [[ -n "${POETRY_ACTIVE:-}" ]]; then

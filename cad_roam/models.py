@@ -22,7 +22,12 @@ A model as a place (``build``, sent as JSON by ``GET /_roam/world/<owner>/<item>
                                                           # size, height, the pedestal's height
              "pedestal", "plot": [w, d],                  # the pedestal's side (0 = none), the paving
              "mesh", "box" (model units, Z up), "ground" (model z on the floor),
-             "unit", "unit_from" ("set", "code" or "default"), "tris", "thumb", "updated", "by"}
+             "unit", "unit_from" ("set", "code" or "default"), "tris", "big",
+             "thumb", "updated", "by"}
+
+``big`` is null, or ``{"limit", "bytes"}`` for a GLB with more triangles than
+``CAD_ROAM_MAX_TRIANGLES`` (the limit): the browser asks before it downloads its ``bytes``
+(gzipped) and draws it (:func:`big`).
 
 The browser stands the model up: model Z becomes world Y, the model's front (-Y) faces +Z, where
 people arrive. ``rev`` changes whenever something that shows changes (a rebuild in Codoc in CAD,
@@ -123,8 +128,8 @@ _passed_over: set[tuple[str, str]] = set()
 
 def look(it: Item) -> tuple[Path, meshes.MeshInfo] | None:
     """The file the model is drawn from, and its size: its GLB when the browser can draw it
-    (each part in its colour) and it has no more than ``CAD_ROAM_MAX_TRIANGLES`` triangles, else
-    its STL (in one colour, simplified when it is too big). None while it has no STL (never built).
+    (each part in its colour), however many triangles it has (:func:`big`), else its STL (in one
+    colour, simplified when it is too big). None while it has no STL (never built).
     """
     stl = stl_of(it)
     if stl is None:
@@ -132,16 +137,24 @@ def look(it: Item) -> tuple[Path, meshes.MeshInfo] | None:
     glb = glb_of(it, stl)
     if glb is not None:
         try:
-            found = meshes.info(COLLECTION, it.owner, it.id, glb)
-            why = f"{found.triangles} triangles" if found.triangles > meshes.MAX_TRIANGLES else ""
+            return glb, meshes.info(COLLECTION, it.owner, it.id, glb)
         except (OSError, ValueError) as exc:
             why = str(exc) or type(exc).__name__
-        if not why:
-            return glb, found
         if (str(glb), why) not in _passed_over:
             _passed_over.add((str(glb), why))
             log.warning("%s: drawn from its STL, in one colour (its GLB: %s)", it.ref, why)
     return stl, meshes.info(COLLECTION, it.owner, it.id, stl)
+
+
+def big(it: Item, source: Path, info: meshes.MeshInfo) -> dict | None:
+    """What the browser shows before it loads a GLB with more than ``CAD_ROAM_MAX_TRIANGLES``
+    triangles: the limit, and how many bytes it would download (the gzipped GLB, made now if it
+    isn't yet, as the browser's request would). None for the rest: an STL that big is simplified
+    to the limit instead."""
+    if not meshes.is_glb(source) or info.triangles <= meshes.MAX_TRIANGLES:
+        return None
+    path = meshes.mesh_file(COLLECTION, it.owner, it.id, source)
+    return {"limit": meshes.MAX_TRIANGLES, "bytes": path.stat().st_size}
 
 
 def thumbnail(it: Item) -> Path | None:
@@ -180,7 +193,7 @@ def thing(it: Item) -> dict | None:
     if found is None:
         return None
     key = key_of(it)
-    info = found[1]
+    source, info = found
     chosen = settings.unit(key)
     if chosen:
         unit, unit_from = chosen, "set"
@@ -219,6 +232,7 @@ def thing(it: Item) -> dict | None:
         "unit": unit,
         "unit_from": unit_from,
         "tris": info.triangles,
+        "big": big(it, source, info),
         "thumb": thumb_url(it),
         "updated": it.updated_at,
         "by": str(meta.get("last_editor") or meta.get("created_by_name") or ""),

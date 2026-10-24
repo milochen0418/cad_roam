@@ -185,6 +185,17 @@ def make(root: Path) -> None:
             fh.write(b"# 1 unit = 1 m\nresult = None\n")
 
 
+def rebuild_chapel(root: Path) -> None:
+    """The chapel built again, unchanged (pressing Run in Codoc in CAD writes both files anew)."""
+    parts = chapel()
+    col = Collection("cad-models", app_id="cad", root=root)
+    with col.revise("chapel") as rev:
+        with rev.open("model.stl") as fh:
+            fh.write(stl([t for tris, _ in parts for t in tris]))
+        with rev.open("model.glb") as fh:
+            fh.write(glb(parts))
+
+
 def build_sketch(root: Path) -> None:
     """The sketch's first build (what pressing Run in Codoc in CAD does)."""
     col = Collection("cad-models", app_id="cad", root=root)
