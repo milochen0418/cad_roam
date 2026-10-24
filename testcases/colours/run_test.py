@@ -1,8 +1,8 @@
 """The fixture's chapel in its colours (testcases/fixtures.py: a GLB beside its STL, as Codoc in CAD
-builds write them): each part in its colour, its window as glass; by day the sun doesn't come in,
-in the morning (T) it shines through the blue window and the floor and the wall in front of it
-turn blue; T goes on to the evening and back to the day. The house, which has only an STL, is
-drawn in one colour."""
+builds write them): each part in its colour, its window as glass. At 10:30 the sun doesn't come
+in; T jumps on to 16:30 and 7:30, and in the morning sun the floor and the wall in front of its
+blue east window turn blue; dragged to 16:30 (the sun in the west), the blue is gone again; the
+time is still there after a reload. The house, which has only an STL, is drawn in one colour."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-from common import launch, log, new_page, open_model, place, settle, shot, state, wait_for  # noqa: E402
+from common import launch, log, new_page, open_model, place, settle, shot, state, wait_for, wait_world  # noqa: E402
 
-# Draws a frame and counts, in the lower half of the view (the floor and the foot of the wall), the
-# pixels that are clearly blue.
+# Draws a frame and counts the pixels that are clearly blue (looking away from the window, the blue
+# can only be its light, on the floor and the wall).
 BLUE_SHARE = """() => {
   const e = window.__roam, r = e.renderer;
   e.look.frame();
@@ -25,19 +25,19 @@ BLUE_SHARE = """() => {
   const px = new Uint8Array(w * h * 4);
   gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
   let blue = 0, n = 0;
-  for (let y = 0; y < h / 2; y += 2) {
+  for (let y = 0; y < h; y += 2) {
     for (let x = 0; x < w; x += 2) {
       const i = (y * w + x) * 4;
       n++;
-      if (px[i + 2] > px[i] + 40 && px[i + 2] > px[i + 1] + 15) blue++;
+      if (px[i + 2] > px[i] + 25 && px[i + 2] > px[i + 1] + 8) blue++;
     }
   }
   return blue / n;
 }"""
 
 
-def flags(page) -> str:
-    return page.inner_text(".rm-flags")
+def sun(page) -> tuple[float, str]:
+    return state(page)["time"], page.inner_text(".rm-sun-time")
 
 
 def main() -> int:
@@ -51,30 +51,45 @@ def main() -> int:
         log("chapel:", looks)
         assert looks == {"parts": 4, "glass": 1}, looks
 
-        # Inside, by the window, looking west and down at the floor in front of it.
-        place(page, 1.0, 0, 0, 1.5708, -0.5)
+        # Inside, by the window, looking west-north-west and down, where the morning sun through it
+        # falls on the floor.
+        assert sun(page) == (10.5, "10:30"), sun(page)
+        place(page, 1.0, 0, 0, 1.2, -0.5)
         settle(page, 1.0)
         day = page.evaluate(BLUE_SHARE)
-        log("blue by day:", round(day, 3))
+        log("blue at 10:30:", round(day, 3))
         shot(page, "01-day")
 
         page.keyboard.press("t")
-        wait_for(lambda: "Evening sun" in flags(page), "the evening sun")
+        wait_for(lambda: sun(page) == (16.5, "16:30"), "T: the evening")
         page.keyboard.press("t")
-        wait_for(lambda: "Morning sun" in flags(page), "the morning sun")
+        wait_for(lambda: sun(page) == (7.5, "07:30"), "T: the morning")
         settle(page, 1.0)
         morning = page.evaluate(BLUE_SHARE)
-        log("blue in the morning:", round(morning, 3))
+        log("blue at 07:30:", round(morning, 3))
         shot(page, "02-morning")
         assert day < 0.02, day
         assert morning > 0.08 and morning > 5 * day, (day, morning)
 
-        # Its window from inside, the sun behind it.
+        # The slider: the sun in the west, behind the chapel's back, lights no blue.
+        page.fill(".rm-sun-range", "16.5")
+        wait_for(lambda: sun(page) == (16.5, "16:30"), "dragged to 16:30")
+        settle(page, 0.5)
+        evening = page.evaluate(BLUE_SHARE)
+        log("blue at 16:30:", round(evening, 3))
+        assert evening < morning / 5, (morning, evening)
+
+        # Its window from inside, the morning sun behind it.
+        page.fill(".rm-sun-range", "7.5")
+        wait_for(lambda: sun(page) == (7.5, "07:30"), "dragged to 07:30")
         place(page, -2.0, 0, 0, -1.5708, 0.25)
         settle(page, 0.5)
         shot(page, "03-window")
-        page.keyboard.press("t")
-        wait_for(lambda: flags(page) == "", "the day again")
+
+        # The browser keeps the time.
+        page.reload(wait_until="domcontentloaded")
+        wait_world(page)
+        assert sun(page) == (7.5, "07:30"), sun(page)
 
         # The house has no colours: one part, no glass.
         st = open_model(page, "house")

@@ -24,16 +24,37 @@ import { Thing, needsRebuild } from "./things.js";
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
-// The sun at three times of the day (T switches): its compass bearing and height in degrees (+X
-// is the east, -Z the north), its colour and its strength. By day it stands behind people arriving
-// (+Z, the south) and a little to the east, so fronts are lit; low in the morning and the evening,
-// it shines in through the windows of the east and of the west.
-const SUNS = [
-  { name: "morning", bearing: 95, elevation: 22, color: 0xffeedd, intensity: 2.5 },
-  { name: "day", bearing: 148, elevation: 42, color: 0xfff2df, intensity: 2.6 },
-  { name: "evening", bearing: 258, elevation: 17, color: 0xffc48c, intensity: 2.3 },
-];
-const DAY = 1;
+// The sun crosses the sky along its path on a day in spring or autumn (an equinox) at 41° N,
+// Barcelona's: up in the east at 6:00, highest (49°) in the south at noon, down in the west at
+// 18:00 (solar time; +X is the east, -Z the north). Its time is dragged in the HUD, or T jumps to
+// the morning, the day and the evening. 10:30 is the sun CAD Roam always had: behind people
+// arriving (the south) and a little to the east, so fronts are lit. A browser keeps the time it was
+// left at.
+const LATITUDE = THREE.MathUtils.degToRad(41.4);
+const SUN_TIMES = { first: 6.5, last: 17.5 };
+const TIMES = [7.5, 10.5, 16.5];
+const DAYTIME = 10.5;
+const SUN_KEY = "cad_roam_sun_time";
+const LOW_SUN = new THREE.Color(0xffd2a6);
+const HIGH_SUN = new THREE.Color(0xfff2df);
+
+// Where the sun is at a time of the day (hours): its compass bearing and height, in degrees.
+export function sunAt(hours) {
+  const h = THREE.MathUtils.degToRad(15 * (hours - 12));
+  const elevation = Math.asin(Math.cos(LATITUDE) * Math.cos(h));
+  const bearing = Math.atan2(Math.sin(h), Math.cos(h) * Math.sin(LATITUDE)) + Math.PI;
+  return { bearing: THREE.MathUtils.radToDeg(bearing), elevation: THREE.MathUtils.radToDeg(elevation) };
+}
+
+function savedTime() {
+  try {
+    const t = parseFloat(localStorage.getItem(SUN_KEY));
+    return Number.isFinite(t) ? t : DAYTIME;
+  } catch (e) {
+    return DAYTIME;
+  }
+}
+
 const LOADS_AT_ONCE = 2;
 
 function grassTexture() {
@@ -93,7 +114,10 @@ export class Engine {
       onStick: (x, y, id) => this.input.setStick(x, y, id),
       onRise: (v) => { this.input.touchRise = v; },
       onAction: (a) => this._action(a),
+      sunTimes: SUN_TIMES,
+      onSunTime: (t) => this.setTime(t),
     });
+    this.hud.setSunTime(this.time);
     this.hud.setMode(this.player.mode, false, false);
     this.hud.showHelp(true);
     this.hud.showKeys(true);
@@ -174,8 +198,9 @@ export class Engine {
 
     // Sky light from above, a warm grey from below (not the grass' green: insides would turn
     // green), and a little everywhere, so rooms the sun doesn't reach are still readable.
-    scene.add(new THREE.HemisphereLight(0xdbe8ff, 0x8d8579, 1.15));
-    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    this.skyLight = new THREE.HemisphereLight(0xdbe8ff, 0x8d8579, 1.15);
+    this.fillLight = new THREE.AmbientLight(0xffffff, 0.35);
+    scene.add(this.skyLight, this.fillLight);
     const sun = new THREE.DirectionalLight(0xfff2df, 2.6);
     sun.castShadow = this.quality !== "low";
     sun.shadow.mapSize.set(this.quality === "high" ? 4096 : 2048, this.quality === "high" ? 4096 : 2048);
@@ -183,14 +208,16 @@ export class Engine {
     sun.shadow.normalBias = 0.06;
     this.sun = sun;
     this.sunDir = new THREE.Vector3();
-    this.setTime(DAY);
+    this.setTime(savedTime());
     this._shadowRange(120);
     scene.add(sun, sun.target);
     // Models' colours and glass, and the sunlight through glass (look.js).
     this.look = new Look(this.renderer, scene, sun);
 
+    // In 400 m squares: drawn in software, one 40 km triangle loses so much depth that the grass
+    // came through floors 8 cm above it.
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(40000, 40000),
+      new THREE.PlaneGeometry(40000, 40000, 100, 100),
       this.look.receive(new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, metalness: 0 })),
     );
     ground.rotation.x = -Math.PI / 2;
@@ -207,13 +234,23 @@ export class Engine {
     this.torch = torch;
   }
 
-  // The sun of a time of the day (SUNS).
-  setTime(index) {
-    const s = SUNS[index];
-    this.time = index;
-    this.setSun(s.bearing, s.elevation);
-    this.sun.color.set(s.color);
-    this.sun.intensity = s.intensity;
+  // The sun at a time of the day (hours): low (under 20°), it is warmer and the sky gives less light.
+  setTime(hours) {
+    const t = THREE.MathUtils.clamp(Math.round((Number(hours) || DAYTIME) * 60) / 60, SUN_TIMES.first, SUN_TIMES.last);
+    const { bearing, elevation } = sunAt(t);
+    const k = THREE.MathUtils.smoothstep(elevation, 2, 20);
+    this.time = t;
+    this.setSun(bearing, elevation);
+    this.sun.color.lerpColors(LOW_SUN, HIGH_SUN, k);
+    this.sun.intensity = 1.9 + 0.7 * k;
+    this.skyLight.intensity = 1.15 * (0.7 + 0.3 * k);
+    this.fillLight.intensity = 0.35 * (0.7 + 0.3 * k);
+    if (this.hud) this.hud.setSunTime(t);
+    try {
+      localStorage.setItem(SUN_KEY, String(t));
+    } catch (e) {
+      // A browser that keeps nothing starts at 10:30 again.
+    }
   }
 
   // Where the sun is: its compass bearing (90 = east) and its height above the horizon, in degrees.
@@ -457,28 +494,21 @@ export class Engine {
       this.player.setMode(mode);
       this._emit({ type: "mode", mode });
     }
-    this._flags();
+    this.hud.setMode(this.player.mode, this.player.ghost, this.light);
   }
 
   // ------------------------------------------------------------------ actions
 
-  _flags() {
-    this.hud.setMode(this.player.mode, this.player.ghost, this.light, SUNS[this.time].name);
-  }
-
   _action(a, d) {
     if (a === "mode") this.setMode(this.player.mode === WALK ? FLY : WALK);
-    else if (a === "sun") {
-      this.setTime((this.time + 1) % SUNS.length);
-      this._flags();
-    }
+    else if (a === "sun") this.setTime(TIMES.find((t) => t > this.time + 1e-3) ?? TIMES[0]);
     else if (a === "ghost") {
       this.player.ghost = !this.player.ghost;
-      this._flags();
+      this.hud.setMode(this.player.mode, this.player.ghost, this.light);
     } else if (a === "light") {
       this.light = !this.light;
       this.torch.intensity = this.light ? 60 : 0;
-      this._flags();
+      this.hud.setMode(this.player.mode, this.player.ghost, this.light);
     } else if (a === "interact") this._pickAt(null);
     else if (a === "pick") this._pickAt(d);
     else if (a === "click") {
@@ -538,7 +568,7 @@ export class Engine {
   setLabels(labels) {
     this.labels = labels || {};
     this.hud.setLabels(this.labels);
-    this._flags();
+    this.hud.setMode(this.player.mode, this.player.ghost, this.light);
   }
 
   // ------------------------------------------------------------------ the frame
@@ -637,6 +667,7 @@ export class Engine {
       locked: this.input.locked,
       things,
       looks,
+      time: this.time,
       people: this.peopleList.map((x) => ({ id: x.id, name: x.name, mode: x.mode, p: x.p })),
       figures: [...this.people.figures.keys()],
       connected: this.people.connected,

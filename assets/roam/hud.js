@@ -1,6 +1,6 @@
 // What is drawn over the 3D view: the crosshair and what it points at, walk / drone and the
-// drone's readings, the keys, models still loading, the map, the people here (a click flies to
-// them) and, on touch screens, a stick and buttons.
+// drone's readings, the sun's time, the keys, models still loading, the map, the people here (a
+// click flies to them) and, on touch screens, a stick and buttons.
 
 import { initials } from "./people.js";
 
@@ -15,7 +15,7 @@ function el(tag, cls, parent, text) {
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
 export class Hud {
-  constructor(root, { labels, touch, onMode, onFollow, onStick, onRise, onAction }) {
+  constructor(root, { labels, touch, onMode, onFollow, onStick, onRise, onAction, sunTimes, onSunTime }) {
     this.labels = labels || {};
     this.touch = touch;
     this.root = el("div", "rm-hud", root);
@@ -36,6 +36,16 @@ export class Hud {
     this.walkBtn.addEventListener("click", (e) => { e.stopPropagation(); onMode("walk"); });
     this.flyBtn.addEventListener("click", (e) => { e.stopPropagation(); onMode("fly"); });
     for (const b of [this.walkBtn, this.flyBtn]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    // The sun's time of day: dragged, the sun moves along its path (engine.js).
+    this.sun = el("label", "rm-sun", bottom);
+    el("span", "rm-sun-icon", this.sun, "☀");
+    this.sunRange = el("input", "rm-sun-range", this.sun);
+    Object.assign(this.sunRange, { type: "range", min: String(sunTimes.first), max: String(sunTimes.last), step: String(1 / 12) });
+    this.sunTime = el("span", "rm-sun-time", this.sun);
+    this.sun.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.sunRange.addEventListener("input", () => onSunTime(Number(this.sunRange.value)));
+    // Let go of, it gives the keys back to walking.
+    this.sunRange.addEventListener("pointerup", () => this.sunRange.blur());
     this.flags = el("div", "rm-flags", bottom);
 
     this.hint = el("div", "rm-hint", this.root);
@@ -62,6 +72,8 @@ export class Hud {
     this.walkBtn.textContent = this.t("walk", "Walk");
     this.flyBtn.textContent = this.t("fly", "Drone");
     this.walkBtn.title = this.flyBtn.title = this.t("mode_title", "F switches between walking and flying");
+    this.sun.title = this.t("sun_time", "The sun's time of day (T: morning, day, evening)");
+    this.sunRange.setAttribute("aria-label", this.sun.title);
     const keys = this.touch ? [] : [
       ["W A S D", this.t("k_move", "move")],
       ["Mouse", this.t("k_look", "look around")],
@@ -84,16 +96,21 @@ export class Hud {
     }
   }
 
-  setMode(mode, ghost, light, sun) {
+  setMode(mode, ghost, light) {
     this.walkBtn.classList.toggle("is-on", mode === "walk");
     this.flyBtn.classList.toggle("is-on", mode === "fly");
     const flags = [];
     if (mode === "fly" && ghost) flags.push(this.t("ghost", "Ghost: through walls"));
     if (light) flags.push(this.t("light", "Torch on"));
-    if (sun === "morning") flags.push(this.t("sun_morning", "Morning sun"));
-    if (sun === "evening") flags.push(this.t("sun_evening", "Evening sun"));
     this.flags.textContent = flags.join(" · ");
     this.root.dataset.mode = mode;
+  }
+
+  // The sun's time (hours) on the slider and as hh:mm.
+  setSunTime(hours) {
+    this.sunRange.value = String(hours);
+    const m = Math.round(hours * 60);
+    this.sunTime.textContent = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   }
 
   setLocked(locked) {

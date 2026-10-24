@@ -28,12 +28,12 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
 **Two ways to move** (press **F** to switch)
 - **Walk** like in a game: W A S D (or the arrows) to move, the mouse to look (click the view; Esc frees the mouse, or drag to look without it), Space to jump, Shift to run. Walls stop you, stairs and kerbs are stepped up (up to 36 cm), and you fall off ledges.
 - **Drone**: Space up, Shift (or Q) down, the wheel sets its top speed (1 to 160 m/s). It drifts a little and leans into turns like a real drone, bumps into the model, and with **G** flies through walls (ghost). It shows its height above whatever is below it, its speed and its heading.
-- **L** lights a torch for dark insides, **T** moves the sun (morning, day, evening), **E** (or a click while looking) opens the model's details, **H** shows the keys again. Phones and tablets get a stick and up/down buttons; a gamepad works too (sticks, A up, B down, Y switches).
+- **L** lights a torch for dark insides, **T** jumps the sun to the morning, the day or the evening (the ☀ slider under Walk / Drone moves it through the day), **E** (or a click while looking) opens the model's details, **H** shows the keys again. Phones and tablets get a stick and up/down buttons; a gamepad works too (sticks, A up, B down, Y switches).
 
 **In its colours**
 - A model built in Codoc in CAD since it has colours shows each part in its colour: the build writes a GLB beside the STL, and CAD Roam draws that. Models built before, and STL files imported on the storage page, are drawn in one stone colour (press Run in Codoc in CAD to get the colours).
 - See-through parts (a colour with an alpha, like `("#2f6fd6", 0.55)`) are glass. From inside, a stained-glass window shows the sky in its colour and glows when the sun is behind it; the sunlight that comes through it falls in its colour on whatever it reaches, its pattern cut by the stone round it.
-- **T** moves the sun: by day it stands high in the south-south-east, behind you as you arrive (+X is east, the front of a model faces south); in the morning it is low in the east, in the evening low in the west. The Sagrada Família's Nativity side (+X) has the cool windows, its Passion side the warm ones, as in the real church.
+- **The sun's time**: drag the ☀ slider under Walk / Drone from 6:30 to 17:30, and the sun crosses the sky as it does on a spring or autumn day at Barcelona's latitude: up in the east, 49° high in the south at noon, down in the west, warmer and with a dimmer sky when it is low. **T** jumps to 7:30, 10:30 and 16:30. 10:30 is where you arrive: the sun behind you, a little to the east (+X is east, the front of a model faces south). Your browser keeps the time you leave it at. The Sagrada Família's Nativity side (+X) has the cool windows, lit in the morning, its Passion side the warm ones, lit in the afternoon, as in the real church.
 - Under a roof, less of the sky's light gets in, so insides are dimmer than outside and their windows' light shows. These lights need *Best (shadows)*; *Fast* shows the colours and the glass only.
 
 **Real size**
@@ -109,7 +109,7 @@ The E2E suites build their own small `cad-models` collection (`testcases/fixture
 - **A model is tiny or huge.** Details says what size CAD Roam uses and why; choose one, or add `# 1 unit = 1 m` to its code.
 - **"Not built yet".** The model has no STL: open it in Codoc in CAD and press Run.
 - **All one colour.** It was last built before Codoc in CAD wrote colours: press Run there once.
-- **No light through the windows.** Press T for the morning or the evening sun (by day it is high and in the south), and choose *Best (shadows)*.
+- **No light through the windows.** Move the sun (the ☀ slider, or T) to where the windows face: the east ones in the morning, the west ones in the afternoon. At 10:30 it is high in the south-east. And choose *Best (shadows)*.
 - **Slow.** Pick *Fast (no shadows)* in the top bar. Browsers without a GPU draw 3D in software.
 - **The mouse doesn't turn the view.** Click the view once (Esc gives the mouse back), or drag.
 
