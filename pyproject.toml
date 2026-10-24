@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "cad-roam"
+version = "0.1.0"
+description = "Walk into a CAD model at its real size like in a game, or fly round it like a drone; everyone at the same model sees each other. Reads Codoc in CAD's models (the cad-models collection) on *.reflex-ddns.com."
+authors = ["Milo Chen"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "cad_roam"}]
+
+[tool.poetry.dependencies]
+# 3.11 floor: Reflex 0.10 and the re_ddns smart-launcher image (python:3.11).
+# <3.15 cap: numpy 2.4 (its last line for Python 3.11) has no CPython 3.15 wheels.
+python = ">=3.11,<3.15"
+reflex = "0.10.0"
+# The shared cad-models collection, sign-in, Call everyone (DDNS Intent call.join) and "Open with".
+reflex-ddns-auth = {path = "../reflex_ddns_auth", develop = true}
+# Reading STL models and turning them into compact meshes for the browser.
+numpy = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+httpx = "*"
+playwright = "^1.42.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,132 @@
+/* Roam's 3D view: the canvas, the names over things and people, and the HUD (hud.js). */
+
+.rm-world { position: absolute; inset: 0; overflow: hidden; background: #0b1220; }
+.rm-surface { position: absolute; inset: 0; outline: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+.rm-canvas { position: absolute; inset: 0; display: block; }
+.rm-labels { position: absolute; inset: 0; pointer-events: none; }
+
+.rm-label {
+  pointer-events: none; text-align: center; transform: translateY(-6px);
+  font: 600 13px/1.25 Inter, system-ui, sans-serif; color: #0f172a;
+  background: rgba(255, 255, 255, 0.86); border-radius: 10px; padding: 4px 10px 5px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18); max-width: 260px; white-space: nowrap;
+}
+.rm-label-title { overflow: hidden; text-overflow: ellipsis; }
+.rm-label-sub { font-weight: 500; font-size: 11px; color: #0f766e; }
+.rm-label-sub:empty { display: none; }
+
+.rm-person {
+  pointer-events: none; transform: translateY(-4px);
+  font: 600 12px/1 Inter, system-ui, sans-serif; color: #fff; white-space: nowrap;
+  background: var(--c, #0ea5e9); border-radius: 999px; padding: 5px 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.rm-hud { position: absolute; inset: 0; pointer-events: none; font-family: Inter, system-ui, sans-serif; color: #e2e8f0; }
+.rm-hud button { pointer-events: auto; font-family: inherit; }
+
+.rm-cross {
+  position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+  border-radius: 50%; background: rgba(255, 255, 255, 0.95); box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.45);
+  opacity: 0; transition: opacity 0.15s;
+}
+.rm-hud.is-locked .rm-cross, .rm-hud.is-touch .rm-cross { opacity: 1; }
+
+.rm-target {
+  position: absolute; left: 50%; top: calc(50% + 18px); transform: translateX(-50%);
+  text-align: center; opacity: 0; transition: opacity 0.15s; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.rm-target.is-on { opacity: 1; }
+.rm-target-title { font-weight: 700; font-size: 15px; color: #fff; }
+.rm-target-hint { font-size: 12px; color: #cbd5e1; margin-top: 2px; }
+
+.rm-bottom {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.rm-tele {
+  font: 600 12px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; letter-spacing: 0.02em;
+  background: rgba(15, 23, 42, 0.62); padding: 7px 12px; border-radius: 8px; white-space: pre;
+}
+.rm-tele:empty { display: none; }
+.rm-modes { display: flex; gap: 4px; background: rgba(15, 23, 42, 0.62); padding: 4px; border-radius: 12px; backdrop-filter: blur(8px); }
+.rm-mode-btn {
+  border: 0; border-radius: 9px; padding: 7px 14px; background: transparent; color: #cbd5e1;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.rm-mode-btn:hover { background: rgba(148, 163, 184, 0.18); }
+.rm-mode-btn.is-on { background: #14b8a6; color: #042f2e; }
+.rm-flags { font-size: 12px; color: #fde68a; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
+.rm-flags:empty { display: none; }
+
+.rm-help {
+  position: absolute; left: 16px; bottom: 16px; display: none;
+  background: rgba(15, 23, 42, 0.66); backdrop-filter: blur(10px); border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px; padding: 12px 14px;
+}
+.rm-hud.show-keys .rm-help { display: block; }
+.rm-hint {
+  position: absolute; left: 50%; top: calc(50% - 22px); transform: translate(-50%, -100%); display: none;
+  font-size: 15px; font-weight: 700; color: #fff; white-space: nowrap;
+  background: rgba(15, 23, 42, 0.62); border-radius: 999px; padding: 8px 16px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.rm-hud.show-help .rm-hint { display: block; }
+.rm-hud.is-touch .rm-help { display: none; }
+.rm-help-keys { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 12px; color: #cbd5e1; }
+.rm-help-keys kbd {
+  font: 600 11px/1 "JetBrains Mono", ui-monospace, monospace; color: #e2e8f0; background: #1e293b;
+  border: 1px solid #334155; border-bottom-width: 2px; border-radius: 5px; padding: 4px 6px; text-align: center;
+}
+.rm-help-keys:empty { display: none; }
+
+.rm-loading { position: absolute; left: 16px; top: 64px; display: flex; flex-direction: column; gap: 6px; }
+.rm-loading-row {
+  display: flex; align-items: center; gap: 8px; font-size: 12px; background: rgba(15, 23, 42, 0.62);
+  border-radius: 8px; padding: 6px 10px;
+}
+.rm-loading-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rm-loading-bar { width: 90px; height: 5px; border-radius: 3px; background: rgba(148, 163, 184, 0.35); overflow: hidden; }
+.rm-loading-bar i { display: block; height: 100%; background: #2dd4bf; }
+
+.rm-map { position: absolute; right: 16px; bottom: 16px; width: 168px; height: 168px; border-radius: 50%; }
+.rm-hud.is-touch .rm-map { top: 64px; bottom: auto; width: 120px; height: 120px; }
+
+.rm-people { position: absolute; right: 16px; top: 64px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.rm-hud.is-touch .rm-people { top: 196px; }
+.rm-chip {
+  display: flex; align-items: center; gap: 7px; border: 0; cursor: pointer; color: #fff;
+  background: rgba(15, 23, 42, 0.66); border-radius: 999px; padding: 3px 11px 3px 3px; font-size: 12px; font-weight: 600;
+  box-shadow: inset 0 0 0 2px var(--c);
+}
+.rm-chip:hover { background: rgba(30, 41, 59, 0.9); }
+.rm-chip-face {
+  width: 24px; height: 24px; border-radius: 50%; background: var(--c); display: flex; align-items: center;
+  justify-content: center; font-size: 10px; font-weight: 700; overflow: hidden;
+}
+.rm-chip-face img { width: 100%; height: 100%; object-fit: cover; }
+.rm-chip-mode:empty { display: none; }
+
+.rm-notice {
+  position: absolute; left: 50%; top: 72px; transform: translateX(-50%); background: rgba(15, 23, 42, 0.8);
+  padding: 8px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity 0.2s;
+}
+.rm-notice.is-on { opacity: 1; }
+
+.rm-fade { position: absolute; inset: 0; background: #fff; opacity: 0; }
+.rm-fade.is-on { animation: rm-fade 0.5s ease-out; }
+@keyframes rm-fade { from { opacity: 0.55; } to { opacity: 0; } }
+
+.rm-stick {
+  position: absolute; left: 28px; bottom: 28px; width: 132px; height: 132px; border-radius: 50%;
+  background: rgba(15, 23, 42, 0.35); border: 2px solid rgba(226, 232, 240, 0.35); pointer-events: auto; touch-action: none;
+}
+.rm-knob {
+  position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%;
+  background: rgba(226, 232, 240, 0.75);
+}
+.rm-touch-btns { position: absolute; right: 22px; bottom: 28px; display: flex; flex-direction: column; gap: 10px; }
+.rm-touch-btn {
+  width: 58px; height: 58px; border-radius: 50%; border: 2px solid rgba(226, 232, 240, 0.4);
+  background: rgba(15, 23, 42, 0.5); color: #fff; font-size: 20px; touch-action: none;
+}
+.rm-hud.is-touch .rm-bottom { bottom: 176px; }
