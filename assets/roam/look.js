@@ -1,8 +1,9 @@
 // How a model with colours looks (drawn from the GLB its build wrote beside the STL, see
-// cad_roam/models.py): each part in its colour, and see-through parts (glTF's alpha under 1) as
-// glass. Glass tints what is behind it (the sky through a stained-glass window), glows where the
-// sun is behind it, and lets the sun through in its colour: the floor and the pillars it falls
-// on take that colour.
+// cad_roam/models.py): each part in its colour, see-through parts (glTF's alpha under 1) as
+// glass, and parts that give light (glTF's emissive colour: lamps) lit in their colour, also in
+// the dark (their light doesn't fall on anything yet). Glass tints what is behind it (the sky
+// through a stained-glass window), glows where the sun is behind it, and lets the sun through in
+// its colour: the floor and the pillars it falls on take that colour.
 //
 // Glass is drawn twice, after everything solid: once multiplying what is behind it by its colour
 // (each face by the square root: a pane has two), once adding its own light (reflections, and
@@ -28,6 +29,10 @@ const SKY_MAP = 2048;
 export const SOLID_LAYER = 1;
 // How much of the sky's light reaches under a roof.
 const COVERED = 0.5;
+// What of the light around it a part that gives light still shows (its shape): a lamp is seen in
+// its own light, drawn without the view's tone mapping, which pales a bright warm lamp to cream
+// and a blue one to white. At glow 1 it shows its colour as it is, by day and in the dark.
+const LIT_BY_OTHERS = 0.25;
 
 // The shader of the lights, as three.js has it: what is added goes after (or before) `anchor`,
 // found after `section`.
@@ -105,6 +110,12 @@ export function isGlass(material) {
   return !!material.transparent && material.opacity < 0.999;
 }
 
+// Parts that give light: glTF's emissive colour (KHR_materials_emissive_strength, its intensity).
+export function isGlowing(material) {
+  const e = material.emissive;
+  return !!e && e.r + e.g + e.b > 0 && (material.emissiveIntensity ?? 1) > 0;
+}
+
 // What a see-through part lets through: its colour, all of it from about half covering (stained
 // glass), only a hint of it when it is nearly clear.
 export function transmittance(material) {
@@ -149,6 +160,10 @@ function shining(source, t, flat) {
     depthWrite: false,
     fog: false,
     blending: THREE.AdditiveBlending,
+    // A glowing pane (a lamp's glass shade) adds its own light.
+    emissive: source.emissive || 0x000000,
+    emissiveIntensity: source.emissiveIntensity ?? 1,
+    toneMapped: !isGlowing(source),
   });
   // The sun through the pane (per face): its colour, a little more saturated than the light it
   // lets through, so a window the sun is behind glows in its colour, not white.
@@ -226,12 +241,14 @@ export class Look {
   meshes(geometry, source) {
     const flat = !geometry.attributes.normal;
     if (!isGlass(source)) {
+      const glowing = isGlowing(source);
       const material = this.receive(new THREE.MeshStandardMaterial({
-        color: source.color,
+        color: glowing ? source.color.clone().multiplyScalar(LIT_BY_OTHERS) : source.color,
         metalness: source.metalness ?? 0,
         roughness: source.roughness ?? 1,
         emissive: source.emissive || 0x000000,
         emissiveIntensity: source.emissiveIntensity ?? 1,
+        toneMapped: !glowing,
         side: THREE.DoubleSide,
         flatShading: flat,
       }));

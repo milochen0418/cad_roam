@@ -700,7 +700,7 @@ export class Engine {
     const things = {}, looks = {};
     for (const [k, t] of this.things) {
       things[k] = t.status;
-      looks[k] = { parts: t.parts, glass: t.glass };
+      looks[k] = { parts: t.parts, glass: t.glass, glow: t.glow };
     }
     return {
       ready: this.ready,

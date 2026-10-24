@@ -6,8 +6,9 @@
 - ``part``: a 60 mm block with no size in its code (millimetres, so it stands on a pedestal);
 - ``sketch``: a model that never built (code, no STL);
 - ``chapel``: an 8 x 12 m chapel in its colours (``model.glb`` beside its STL, as Codoc in CAD
-  builds write them): stone walls, a light floor, a red roof, a door at the front and a blue
-  stained-glass window (4 x 2.5 m) in its east wall ("# 1 unit = 1 m").
+  builds write them): stone walls, a light floor, a red roof, a door at the front, a blue
+  stained-glass window (4 x 2.5 m) in its east wall and a warm lamp that glows (glTF's emissive
+  colour) hanging in the middle, 4 m up ("# 1 unit = 1 m").
 
     python testcases/fixtures.py <root>     # makes it (used by run_test_suite.sh)
 """
@@ -64,6 +65,7 @@ def house() -> list:
 
 # The chapel, in metres, by colour (r, g, b, alpha; linear, as glTF has them).
 STONE, FLOOR, ROOF, BLUE_GLASS = (0.6, 0.48, 0.3, 1.0), (0.72, 0.67, 0.58, 1.0), (0.45, 0.08, 0.05, 1.0), (0.03, 0.16, 0.67, 0.55)
+LAMP = (1.0, 0.55, 0.18, 1.0)  # warm, and it glows
 CW, CD, CH, CWALL = 8.0, 12.0, 5.0, 0.3
 
 
@@ -84,14 +86,15 @@ def chapel() -> list:
         (box(-hw, -hd, 0, hw, hd, 0.05), FLOOR),
         (box(-hw, -hd, CH, hw, hd, CH + 0.2), ROOF),
         (box(hw - 0.18, -2.0, 1.5, hw - 0.12, 2.0, 4.0), BLUE_GLASS),
+        (box(-0.3, -0.3, 4.0, 0.3, 0.3, 4.3), LAMP, True),
     ]
 
 
 def glb(parts) -> bytes:
     """A GLB as Codoc in CAD writes one: a root node turning Z up into glTF's Y up, a node and a
-    material per colour."""
+    material per colour (a part given as (triangles, colour, True) glows in its colour)."""
     blob, views, accessors, meshes, materials, children = bytearray(), [], [], [], [], []
-    for tris, (r, g, b, a) in parts:
+    for tris, (r, g, b, a), *glows in parts:
         corners = [v for tri in tris for v in tri]
         normals = []
         for t in tris:
@@ -114,6 +117,8 @@ def glb(parts) -> bytes:
         material = {"pbrMetallicRoughness": {"baseColorFactor": [r, g, b, a], "metallicFactor": 0.1, "roughnessFactor": 0.6}, "doubleSided": True}
         if a < 1:
             material["alphaMode"] = "BLEND"
+        if any(glows):
+            material["emissiveFactor"] = [r, g, b]
         materials.append(material)
         meshes.append({"primitives": [{"attributes": {"POSITION": refs[0], "NORMAL": refs[1]}, "indices": refs[2], "material": len(materials) - 1}]})
         children.append(len(meshes))
@@ -178,7 +183,7 @@ def make(root: Path) -> None:
     model(root, "house", "House", "# A room to walk into (1 unit = 1 m)\nresult = None\n", house())
     model(root, "tower", "Tower", "# units: mm\nresult = None\n", scaled(box(-2, -2, 0, 2, 2, 30), 1000))
     parts = chapel()
-    model(root, "chapel", "Chapel", "# A chapel with a blue window (1 unit = 1 m)\nresult = None\n", [t for tris, _ in parts for t in tris], glb(parts))
+    model(root, "chapel", "Chapel", "# A chapel with a blue window (1 unit = 1 m)\nresult = None\n", [t for tris, *_ in parts for t in tris], glb(parts))
     col = Collection("cad-models", app_id="cad", root=root)
     with col.publish("sketch", kind="cad.build123d", primary="model.py", title="Sketch", meta={"created_by_name": "Fixture"}) as item:
         with item.open("model.py") as fh:
@@ -191,7 +196,7 @@ def rebuild_chapel(root: Path) -> None:
     col = Collection("cad-models", app_id="cad", root=root)
     with col.revise("chapel") as rev:
         with rev.open("model.stl") as fh:
-            fh.write(stl([t for tris, _ in parts for t in tris]))
+            fh.write(stl([t for tris, *_ in parts for t in tris]))
         with rev.open("model.glb") as fh:
             fh.write(glb(parts))
 

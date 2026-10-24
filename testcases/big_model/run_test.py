@@ -1,5 +1,5 @@
 """A model over the server's triangle limit isn't loaded until you say so (server.env sets
-CAD_ROAM_MAX_TRIANGLES to 100, so the chapel's GLB, 144 triangles, is one): a question says what
+CAD_ROAM_MAX_TRIANGLES to 100, so the chapel's GLB, 156 triangles, is one): a question says what
 loading it costs (its triangles against the limit, the download, about how much memory). "Don't
 load" leaves its outline, "not loaded" on it and a button at the top left that loads it after all,
 in its colours. A new page asks again; "Load it" there also takes its next build without asking.
@@ -44,8 +44,8 @@ def main() -> int:
         words = ask(page, "chapel")
         log("asked:", words.replace("\n", " | "))
         assert "This model is big" in words, words
-        assert "Chapel has 144 triangles, 1.4 times the suggested limit of 100." in words, words
-        assert "Download" in words and "Memory" in words and "about 26 KB" in words, words
+        assert "Chapel has 156 triangles, 1.6 times the suggested limit of 100." in words, words
+        assert "Download" in words and "Memory" in words and "about 28 KB" in words, words
         assert status(page) == "waiting" and not meshes, (status(page), meshes)
         shot(page, "01-asked")
 
@@ -61,7 +61,7 @@ def main() -> int:
         shot(page, "02-not-loaded")
         page.click("#rm-big-later")
         wait_for(lambda: status(page) == "ready", "loaded after all", 120)
-        assert state(page)["looks"]["cad/chapel"] == {"parts": 4, "glass": 1}
+        assert state(page)["looks"]["cad/chapel"] == {"parts": 5, "glass": 1, "glow": 1}
         wait_for(lambda: page.inner_text(".rm-loading").strip() == "", "the row is gone")
         assert meshes, "its mesh was fetched"
         shot(page, "03-loaded")
@@ -89,8 +89,8 @@ def main() -> int:
         wait_for(lambda: "這個模型很大" in zh.inner_text(ASKING), "the question in 繁體中文")
         words = zh.inner_text(ASKING)
         log("zh:", words.replace("\n", " | "))
-        assert "Chapel 有 144 個三角形，是建議上限 100 的 1.4 倍。" in words, words
-        assert "約 26 KB" in words and "不載入" in words, words
+        assert "Chapel 有 156 個三角形，是建議上限 100 的 1.6 倍。" in words, words
+        assert "約 28 KB" in words and "不載入" in words, words
         shot(zh, "04-zh")
         browser.close()
     if errors:

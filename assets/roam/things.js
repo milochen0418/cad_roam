@@ -10,6 +10,7 @@ import * as THREE from "three";
 import { MeshBVH } from "three-mesh-bvh";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+import { isGlowing } from "./look.js";
 
 const STONES = [0xefe9df, 0xe7dcc6, 0xdcc9a7, 0xd9e2d4, 0xdde1e6, 0xeadad3];
 const PAVING = 0xd8d2c4;
@@ -168,8 +169,9 @@ export class Thing {
     );
     this.status = "waiting"; // "waiting" | "loading" | "ready" | "failed" | "skipped" (big, not wanted)
     this.progress = 0;
-    this.parts = 0; // once loaded: its materials (1 for an STL), and how many are glass
+    this.parts = 0; // once loaded: its materials (1 for an STL), how many are glass, how many glow
     this.glass = 0;
+    this.glow = 0;
     this._abort = null;
     ctx.scene.add(this.group);
     this._plot();
@@ -327,6 +329,7 @@ export class Thing {
       this.pickables.push(meshes[0]);
       this.parts++;
       if (meshes[0].userData.glass) this.glass++;
+      if (material && isGlowing(material)) this.glow++;
     }
     if (this.placeholder) {
       this.group.remove(this.placeholder);
