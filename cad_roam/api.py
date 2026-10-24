@@ -3,8 +3,8 @@ to the backend behind re-ddns' nginx); a model is ``<owner>/<item>`` of the ``ca
 collection:
 
 - ``GET /_roam/world/<owner>/<item>``: the model as a place, JSON (:mod:`cad_roam.models`).
-- ``GET /_roam/mesh/<owner>/<item>?v=<stamp>``: its mesh, gzipped (:mod:`cad_roam.meshes`); made
-  on the first request after a build, cached for good after that.
+- ``GET /_roam/mesh/<owner>/<item>?v=<stamp>``: its mesh or its GLB, gzipped
+  (:mod:`cad_roam.meshes`); made on the first request after a build, cached for good after that.
 - ``GET /_roam/thumb/<owner>/<item>``: its picture (Codoc in CAD's last build).
 - ``WS /_roam/ws/<owner>/<item>``: being there with others (:mod:`cad_roam.presence`).
 
@@ -75,15 +75,16 @@ def _gzip_size(path: Path) -> int:
 async def mesh(request: Request) -> Response:
     key = _key(request.path_params)
     it = models.item(key) if key else None
-    stl = models.stl_of(it) if it is not None else None
-    if stl is None:
-        return _missing("No such model")
     try:
-        path = await asyncio.to_thread(meshes.mesh_file, models.COLLECTION, it.owner, it.id, stl)
+        found = await asyncio.to_thread(models.look, it) if it is not None else None
+        if found is None:
+            return _missing("No such model")
+        source, info = found
+        path = await asyncio.to_thread(meshes.mesh_file, models.COLLECTION, it.owner, it.id, source)
     except (OSError, ValueError) as exc:
         log.warning("%s: no mesh (%s)", it.ref, exc)
         return Response("The model could not be read", status_code=422, headers=OPEN)
-    current = request.query_params.get("v") == meshes.stamp(stl)
+    current = request.query_params.get("v") == info.stamp
     headers = {
         **OPEN,
         "Content-Encoding": "gzip",

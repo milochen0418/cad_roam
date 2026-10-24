@@ -2,8 +2,8 @@ import time
 
 import pytest
 
-from cad_roam import models, settings
-from tests.conftest import PNG, publish_file, publish_model, revise_model
+from cad_roam import meshes, models, settings
+from tests.conftest import PNG, box_triangles, glb_bytes, publish_file, publish_model, revise_model
 
 TAJ = "# Taj Mahal (scale: 1 unit = 0.5 m)\nresult = None\n"
 CATHEDRAL = "# 單位：1 = 1 公尺\nresult = None\n"
@@ -96,3 +96,24 @@ def test_the_place_changes_when_the_model_is_rebuilt(cad):
     Collection("cad-models", app_id="cad", root=cad).remove("taj0000001")
     assert store.changed("cad/taj0000001")
     assert not store.changed("cad/taj0000001")
+
+
+def test_a_model_with_colours_is_drawn_from_its_glb(root):
+    # What Codoc in CAD writes: model.stl, and model.glb beside it with each part's colour.
+    glb = glb_bytes([(box_triangles(250, 220, 170), (0.8, 0.7, 0.5, 1.0)), (box_triangles(4, 0.1, 18, 0, -110, 6), (0.2, 0.4, 0.9, 0.55))])
+    publish_model(root, "sagrada002", CATHEDRAL, (250, 220, 170), title="Sagrada", glb=glb)
+    it = models.item("cad/sagrada002")
+    source, info = models.look(it)
+    assert source.name == "model.glb" and info.triangles == 24
+    s = only(models.build("cad/sagrada002"))
+    assert s["mesh"].endswith(f"?v={meshes.stamp(source)}") and (s["w"], s["h"]) == (250.0, 170.0)
+
+
+def test_a_glb_it_cant_draw_leaves_the_stl(root, monkeypatch):
+    bad = glb_bytes([(box_triangles(10, 10, 10), (1, 0, 0, 1))], required=("EXT_meshopt_compression",))
+    publish_model(root, "draco00001", CATHEDRAL, (10, 10, 10), glb=bad)
+    assert models.look(models.item("cad/draco00001"))[0].name == "model.stl"
+    # Nor one with more triangles than CAD Roam draws (its STL is simplified instead).
+    publish_model(root, "huge000001", CATHEDRAL, (10, 10, 10), glb=glb_bytes([(box_triangles(10, 10, 10), (1, 0, 0, 1))]))
+    monkeypatch.setattr(meshes, "MAX_TRIANGLES", 6)
+    assert models.look(models.item("cad/huge000001"))[0].name == "model.stl"

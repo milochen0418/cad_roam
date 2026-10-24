@@ -8,7 +8,7 @@ const MOVE_KEYS = {
   KeyW: ["forward", 1], ArrowUp: ["forward", 1], KeyS: ["forward", -1], ArrowDown: ["forward", -1],
   KeyD: ["strafe", 1], ArrowRight: ["strafe", 1], KeyA: ["strafe", -1], ArrowLeft: ["strafe", -1],
 };
-const ACTION_KEYS = { KeyF: "mode", KeyG: "ghost", KeyL: "light", KeyE: "interact", KeyH: "help", KeyM: "map", KeyR: "respawn" };
+const ACTION_KEYS = { KeyF: "mode", KeyG: "ghost", KeyL: "light", KeyT: "sun", KeyE: "interact", KeyH: "help", KeyM: "map", KeyR: "respawn" };
 
 function typing(target) {
   if (!target) return false;

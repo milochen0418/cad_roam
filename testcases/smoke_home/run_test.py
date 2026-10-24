@@ -27,9 +27,10 @@ def main() -> int:
         page.wait_for_selector(".rm-card", timeout=120000)
         cards = page.eval_on_selector_all(".rm-card", "els => els.map(e => [e.dataset.key, e.innerText])")
         log("cards", [c[0] for c in cards])
-        assert {c[0] for c in cards} == {"cad/house", "cad/tower", "cad/part", "cad/sketch"}, cards
+        assert {c[0] for c in cards} == {"cad/house", "cad/tower", "cad/part", "cad/sketch", "cad/chapel"}, cards
         text = dict(cards)
         assert "10 × 8 m, 3.2 m high" in text["cad/house"], text["cad/house"]
+        assert "8 × 12 m, 5.2 m high" in text["cad/chapel"], text["cad/chapel"]
         assert "4 × 4 m, 30 m high" in text["cad/tower"], text["cad/tower"]
         assert "Not built yet" in text["cad/sketch"], text["cad/sketch"]
         shot(page, "01-home")

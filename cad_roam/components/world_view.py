@@ -9,7 +9,7 @@ world.jsx are imported relatively. three.js and three-mesh-bvh are npm packages 
 import reflex as rx
 
 _JS = rx.asset("roam/world.jsx")
-for _name in ("engine.js", "input.js", "player.js", "things.js", "people.js", "hud.js", "roam.css"):
+for _name in ("engine.js", "input.js", "look.js", "player.js", "things.js", "people.js", "hud.js", "roam.css"):
     rx.asset(f"roam/{_name}")
 
 LIBS = ["three@0.186.1", "three-mesh-bvh@0.9.15"]

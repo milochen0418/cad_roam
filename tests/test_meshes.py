@@ -2,8 +2,12 @@ import gzip
 
 import numpy as np
 
+import pytest
+
 from cad_roam import meshes
-from tests.conftest import box_triangles, stl_bytes
+from tests.conftest import box_triangles, glb_bytes, stl_bytes
+
+STONE, BLUE_GLASS = (0.8, 0.7, 0.5, 1.0), (0.03, 0.16, 0.67, 0.55)
 
 
 def test_binary_and_ascii_stl(tmp_path):
@@ -79,3 +83,38 @@ def test_cache_follows_the_stl(tmp_path, monkeypatch):
     second = meshes.mesh_file("c", "cad", "m1", stl)
     assert second != first and not first.exists()
     assert meshes.info("c", "cad", "m1", stl).box == (-0.5, -0.5, 0.0, 0.5, 0.5, 1.0)
+
+
+def test_a_glb_in_the_models_axes(tmp_path):
+    # A 10 x 8 x 3 room and a glass pane in its front, both moved by (1, 2, 3): glTF is Y up,
+    # the box comes back Z up, as the STL has it.
+    glb = tmp_path / "model.glb"
+    glb.write_bytes(glb_bytes([(box_triangles(10, 8, 3), STONE), (box_triangles(2, 0.1, 2, 0, -4, 1), BLUE_GLASS)], move=(1, 2, 3)))
+    box, triangles = meshes.glb_box(glb)
+    assert np.allclose(box, (-4, -2.05, 3, 6, 6, 6)) and triangles == 24
+
+
+def test_a_glb_the_browser_cant_draw(tmp_path):
+    glb = tmp_path / "model.glb"
+    glb.write_bytes(glb_bytes([(box_triangles(1, 1, 1), STONE)], required=("KHR_draco_mesh_compression",)))
+    with pytest.raises(ValueError, match="KHR_draco_mesh_compression"):
+        meshes.glb_box(glb)
+    glb.write_bytes(b"solid not a glb\n")
+    with pytest.raises(ValueError):
+        meshes.glb_box(glb)
+
+
+def test_a_glb_is_cached_as_it_is_beside_its_stl(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAD_ROAM_HOME", str(tmp_path / "home"))
+    stl, glb = tmp_path / "model.stl", tmp_path / "model.glb"
+    stl.write_bytes(stl_bytes(box_triangles(10, 8, 3)))
+    data = glb_bytes([(box_triangles(10, 8, 3), STONE)])
+    glb.write_bytes(data)
+    info = meshes.info("c", "cad", "m1", glb)
+    assert info.triangles == 12 and np.allclose(info.box, (-5, -4, 0, 5, 4, 3))
+    sent = meshes.mesh_file("c", "cad", "m1", glb)
+    assert sent.name.endswith(".glb.gz") and sent.parent.name == "glb"
+    assert gzip.decompress(sent.read_bytes()) == data
+    # The STL's mesh lives beside it: making one doesn't remove the other.
+    mesh = meshes.mesh_file("c", "cad", "m1", stl)
+    assert mesh.name.endswith(".rmsh.gz") and sent.exists() and mesh.exists()

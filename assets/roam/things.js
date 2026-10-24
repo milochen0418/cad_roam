@@ -3,10 +3,12 @@
 //
 // Everything is placed and collided in world coordinates (metres, Y up). A thing's data comes
 // from the server (cad_roam/models.py): x, z = the centre of its footprint, w x d its footprint,
-// h its height, base the pedestal under it.
+// h its height, base the pedestal under it. Its mesh is an STL's (cad_roam/meshes.py), drawn in
+// one colour, or the GLB of its build, each part in its colour (look.js says how).
 
 import * as THREE from "three";
 import { MeshBVH } from "three-mesh-bvh";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 
 const STONES = [0xefe9df, 0xe7dcc6, 0xdcc9a7, 0xd9e2d4, 0xdde1e6, 0xeadad3];
@@ -62,10 +64,92 @@ export function parseMesh(buffer) {
   return { positions, indices };
 }
 
+function isGlb(buffer) {
+  return buffer.byteLength >= 12 && new DataView(buffer).getUint32(0, true) === 0x46546c67; // "glTF"
+}
+
+const _m = new THREE.Matrix4();
+const _n = new THREE.Matrix3();
+const _v = new THREE.Vector3();
+
+// The meshes of one material as one geometry, in world coordinates: a model can have thousands
+// of parts (the Sagrada Família, 2,556), and every mesh costs a draw call, twice with shadows.
+function merged(meshes, place) {
+  let corners = 0, count = 0, normals = true;
+  for (const o of meshes) {
+    const g = o.geometry;
+    corners += g.attributes.position.count;
+    count += g.index ? g.index.count : g.attributes.position.count;
+    if (!g.attributes.normal) normals = false;
+  }
+  const position = new Float32Array(corners * 3);
+  const normal = normals ? new Float32Array(corners * 3) : null;
+  const index = corners > 65535 ? new Uint32Array(count) : new Uint16Array(count);
+  let base = 0, at = 0;
+  for (const o of meshes) {
+    const g = o.geometry, p = g.attributes.position, q = g.attributes.normal;
+    _m.multiplyMatrices(place, o.matrixWorld);
+    _n.getNormalMatrix(_m);
+    for (let i = 0; i < p.count; i++) {
+      _v.fromBufferAttribute(p, i).applyMatrix4(_m).toArray(position, (base + i) * 3);
+      if (normal) _v.fromBufferAttribute(q, i).applyMatrix3(_n).normalize().toArray(normal, (base + i) * 3);
+    }
+    if (g.index) {
+      const src = g.index.array;
+      for (let i = 0; i < src.length; i++) index[at + i] = base + src[i];
+      at += src.length;
+    } else {
+      for (let i = 0; i < p.count; i++) index[at + i] = base + i;
+      at += p.count;
+    }
+    base += p.count;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(position, 3));
+  if (normal) geo.setAttribute("normal", new THREE.BufferAttribute(normal, 3));
+  geo.setIndex(new THREE.BufferAttribute(index, 1));
+  return geo;
+}
+
+// A GLB (glTF is Y up: the model's (x, y, z) is glTF's (x, -z, y)) as one geometry per material,
+// placed as placeModel places a mesh: scaled by the unit and moved.
+async function glbParts(buffer, t) {
+  const gltf = await new GLTFLoader().parseAsync(buffer, "");
+  const root = gltf.scene;
+  root.updateMatrixWorld(true);
+  const [x0, y0, , x1, y1] = t.box;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, u = t.unit;
+  const place = new THREE.Matrix4().makeScale(u, u, u).setPosition(t.x - cx * u, t.base - t.ground * u, t.z + cy * u);
+  const byMaterial = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.geometry.attributes.position) return;
+    if (!byMaterial.has(o.material)) byMaterial.set(o.material, []);
+    byMaterial.get(o.material).push(o);
+  });
+  const parts = [...byMaterial].map(([material, meshes]) => ({ geometry: merged(meshes, place), material }));
+  root.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+  });
+  for (const m of byMaterial.keys()) {
+    for (const v of Object.values(m)) if (v && v.isTexture) v.dispose();
+    m.dispose();
+  }
+  return parts;
+}
+
+function meshParts(buffer, t) {
+  const { positions, indices } = parseMesh(buffer);
+  placeModel(positions, t);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  return [{ geometry, material: null }];
+}
+
 export class Thing {
   constructor(data, ctx) {
     this.data = data;
-    this.ctx = ctx; // {scene, url(path), quality, onLoaded(thing), onProgress(thing)}
+    this.ctx = ctx; // {scene, look, url(path), quality, onLoaded(thing), onProgress(thing)}
     this.key = data.key;
     this.group = new THREE.Group();
     this.group.name = data.key;
@@ -78,6 +162,8 @@ export class Thing {
     );
     this.status = "waiting"; // "waiting" | "loading" | "ready" | "failed"
     this.progress = 0;
+    this.parts = 0; // once loaded: its materials (1 for an STL), and how many are glass
+    this.glass = 0;
     this._abort = null;
     ctx.scene.add(this.group);
     this._plot();
@@ -116,7 +202,7 @@ export class Thing {
     const pad = Math.min((pw - tw) / 2, (pd - td) / 2) * 0.7;
     const w = tw + 2 * pad, d = td + 2 * pad;
     const geo = new THREE.BoxGeometry(w, 0.04, d);
-    const mat = new THREE.MeshStandardMaterial({ color: PAVING, roughness: 0.95 });
+    const mat = this.ctx.look.receive(new THREE.MeshStandardMaterial({ color: PAVING, roughness: 0.95 }));
     const slab = new THREE.Mesh(geo, mat);
     slab.position.set(t.x, 0, t.z);
     slab.receiveShadow = true;
@@ -125,7 +211,7 @@ export class Thing {
       const side = t.pedestal || Math.max(t.w, t.d);
       const ped = new THREE.Mesh(
         new THREE.BoxGeometry(side, t.base, side),
-        new THREE.MeshStandardMaterial({ color: PEDESTAL, roughness: 0.6, metalness: 0.1 }),
+        this.ctx.look.receive(new THREE.MeshStandardMaterial({ color: PEDESTAL, roughness: 0.6, metalness: 0.1 })),
       );
       ped.position.set(t.x, t.base / 2, t.z);
       ped.castShadow = ped.receiveShadow = true;
@@ -204,7 +290,12 @@ export class Thing {
         buffer = await res.arrayBuffer();
       }
       if (abort.signal.aborted || this.disposed) return;
-      this._build(parseMesh(buffer));
+      const parts = isGlb(buffer) ? await glbParts(buffer, this.data) : meshParts(buffer, this.data);
+      if (abort.signal.aborted || this.disposed) {
+        for (const p of parts) p.geometry.dispose();
+        return;
+      }
+      this._build(parts);
       this.status = "ready";
       this.progress = 1;
     } catch (e) {
@@ -215,41 +306,45 @@ export class Thing {
     this.ctx.onLoaded(this);
   }
 
-  _build({ positions, indices }) {
-    const t = this.data;
-    placeModel(positions, t);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geo.setIndex(new THREE.BufferAttribute(indices, 1));
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-    geo.boundsTree = new MeshBVH(geo);
-    const mat = new THREE.MeshStandardMaterial({
-      color: STONES[hash(this.key) % STONES.length],
-      roughness: 0.84,
-      metalness: 0.02,
-      flatShading: true,
-      side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.castShadow = this.ctx.quality !== "low";
-    mesh.receiveShadow = true;
-    mesh.userData.key = this.key;
-    this.mesh = mesh;
+  _build(parts) {
+    for (const { geometry: geo, material } of parts) {
+      geo.computeBoundingBox();
+      geo.computeBoundingSphere();
+      geo.boundsTree = new MeshBVH(geo);
+      this.colliders.push({ box: geo.boundingBox.clone(), bvh: geo.boundsTree });
+      this.bounds.union(geo.boundingBox);
+      const meshes = material ? this.ctx.look.meshes(geo, material) : [this._stone(geo)];
+      for (const mesh of meshes) {
+        mesh.userData.key = this.key;
+        this.group.add(mesh);
+      }
+      this.pickables.push(meshes[0]);
+      this.parts++;
+      if (meshes[0].userData.glass) this.glass++;
+    }
     if (this.placeholder) {
       this.group.remove(this.placeholder);
       disposeTree(this.placeholder);
       this.placeholder = null;
     }
-    this.group.add(mesh);
-    this.pickables.push(mesh);
-    this.colliders.push({ box: geo.boundingBox.clone(), bvh: geo.boundsTree });
-    this.bounds.union(geo.boundingBox);
+  }
+
+  // A model without colours (an STL): in a light stone colour of its own.
+  _stone(geo) {
+    const mat = this.ctx.look.receive(new THREE.MeshStandardMaterial({
+      color: STONES[hash(this.key) % STONES.length],
+      roughness: 0.84,
+      metalness: 0.02,
+      flatShading: true,
+      side: THREE.DoubleSide,
+    }));
+    return this.ctx.look.solid(new THREE.Mesh(geo, mat));
   }
 
   dispose() {
     this.disposed = true;
     if (this._abort) this._abort.abort();
+    this.ctx.look.release(this.group);
     this.ctx.scene.remove(this.group);
     if (this.label && this.label.element.parentNode) this.label.element.remove();
     disposeTree(this.group);

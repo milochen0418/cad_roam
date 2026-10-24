@@ -1,5 +1,6 @@
-// CAD Roam's 3D view: the sky and the ground, the model in its place (things.js), you walking or
-// flying (player.js), the others there (people.js) and what is drawn over it all (hud.js).
+// CAD Roam's 3D view: the sky and the ground, the model in its place (things.js) in its colours
+// and with its glass (look.js), you walking or flying (player.js), the others there (people.js)
+// and what is drawn over it all (hud.js).
 //
 // The place comes from GET /_roam/world/<owner>/<item> (cad_roam/models.py) and is fetched again
 // whenever the server says it changed (the model rebuilt in Codoc in CAD, a size someone chose);
@@ -16,14 +17,23 @@ import { Sky } from "three/addons/objects/Sky.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { Hud } from "./hud.js";
 import { Input } from "./input.js";
+import { Look } from "./look.js";
 import { People } from "./people.js";
 import { FLY, Player, WALK } from "./player.js";
 import { Thing, needsRebuild } from "./things.js";
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
-// The sun stands behind people arriving (+Z) and a little to the east, so fronts are lit.
-const SUN = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(48), THREE.MathUtils.degToRad(32));
+// The sun at three times of the day (T switches): its compass bearing and height in degrees (+X
+// is the east, -Z the north), its colour and its strength. By day it stands behind people arriving
+// (+Z, the south) and a little to the east, so fronts are lit; low in the morning and the evening,
+// it shines in through the windows of the east and of the west.
+const SUNS = [
+  { name: "morning", bearing: 95, elevation: 22, color: 0xffeedd, intensity: 2.5 },
+  { name: "day", bearing: 148, elevation: 42, color: 0xfff2df, intensity: 2.6 },
+  { name: "evening", bearing: 258, elevation: 17, color: 0xffc48c, intensity: 2.3 },
+];
+const DAY = 1;
 const LOADS_AT_ONCE = 2;
 
 function grassTexture() {
@@ -152,13 +162,13 @@ export class Engine {
     scene.add(this.camera);
 
     const sky = new Sky();
+    this.sky = sky;
     sky.scale.setScalar(25000);
     const u = sky.material.uniforms;
     u.turbidity.value = 3.2;
     u.rayleigh.value = 1.4;
     u.mieCoefficient.value = 0.004;
     u.mieDirectionalG.value = 0.8;
-    u.sunPosition.value.copy(SUN);
     scene.add(sky);
     scene.fog = new THREE.Fog(0xc7d6e6, 900, 9000);
 
@@ -172,12 +182,16 @@ export class Engine {
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.06;
     this.sun = sun;
+    this.sunDir = new THREE.Vector3();
+    this.setTime(DAY);
     this._shadowRange(120);
     scene.add(sun, sun.target);
+    // Models' colours and glass, and the sunlight through glass (look.js).
+    this.look = new Look(this.renderer, scene, sun);
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(40000, 40000),
-      new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, metalness: 0 }),
+      this.look.receive(new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, metalness: 0 })),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.03;
@@ -191,6 +205,22 @@ export class Engine {
     torch.target.position.set(0, 0, -1);
     this.camera.add(torch, torch.target);
     this.torch = torch;
+  }
+
+  // The sun of a time of the day (SUNS).
+  setTime(index) {
+    const s = SUNS[index];
+    this.time = index;
+    this.setSun(s.bearing, s.elevation);
+    this.sun.color.set(s.color);
+    this.sun.intensity = s.intensity;
+  }
+
+  // Where the sun is: its compass bearing (90 = east) and its height above the horizon, in degrees.
+  setSun(bearing, elevation) {
+    const b = THREE.MathUtils.degToRad(bearing), e = THREE.MathUtils.degToRad(elevation);
+    this.sunDir.set(Math.cos(e) * Math.sin(b), Math.sin(e), -Math.cos(e) * Math.cos(b));
+    this.sky.material.uniforms.sunPosition.value.copy(this.sunDir);
   }
 
   _shadowRange(r) {
@@ -250,6 +280,7 @@ export class Engine {
   _ctx() {
     return {
       scene: this.scene,
+      look: this.look,
       quality: this.quality,
       url: (p) => this.url(p),
       onProgress: () => { this._loadingChanged = true; },
@@ -426,20 +457,28 @@ export class Engine {
       this.player.setMode(mode);
       this._emit({ type: "mode", mode });
     }
-    this.hud.setMode(this.player.mode, this.player.ghost, this.light);
+    this._flags();
   }
 
   // ------------------------------------------------------------------ actions
 
+  _flags() {
+    this.hud.setMode(this.player.mode, this.player.ghost, this.light, SUNS[this.time].name);
+  }
+
   _action(a, d) {
     if (a === "mode") this.setMode(this.player.mode === WALK ? FLY : WALK);
+    else if (a === "sun") {
+      this.setTime((this.time + 1) % SUNS.length);
+      this._flags();
+    }
     else if (a === "ghost") {
       this.player.ghost = !this.player.ghost;
-      this.hud.setMode(this.player.mode, this.player.ghost, this.light);
+      this._flags();
     } else if (a === "light") {
       this.light = !this.light;
       this.torch.intensity = this.light ? 60 : 0;
-      this.hud.setMode(this.player.mode, this.player.ghost, this.light);
+      this._flags();
     } else if (a === "interact") this._pickAt(null);
     else if (a === "pick") this._pickAt(d);
     else if (a === "click") {
@@ -499,7 +538,7 @@ export class Engine {
   setLabels(labels) {
     this.labels = labels || {};
     this.hud.setLabels(this.labels);
-    this.hud.setMode(this.player.mode, this.player.ghost, this.light);
+    this._flags();
   }
 
   // ------------------------------------------------------------------ the frame
@@ -527,7 +566,8 @@ export class Engine {
     const texel = (2 * r) / this.sun.shadow.mapSize.x;
     const cx = Math.round(p.position.x / texel) * texel, cz = Math.round(p.position.z / texel) * texel;
     this.sun.target.position.set(cx, 0, cz);
-    this.sun.position.set(cx + SUN.x * 1500, SUN.y * 1500, cz + SUN.z * 1500);
+    const sunDir = this.sunDir;
+    this.sun.position.set(cx + sunDir.x * 1500, sunDir.y * 1500, cz + sunDir.z * 1500);
     const wanted = p.mode === FLY ? Math.min(600, Math.max(120, p.position.y * 2.2)) : 120;
     if (Math.abs(wanted - r) / r > 0.25) this._shadowRange(wanted);
 
@@ -543,6 +583,7 @@ export class Engine {
       this._slow = 0;
       this._tick();
     }
+    this.look.frame();
     this.renderer.render(this.scene, this.camera);
     this.labelsRenderer.render(this.scene, this.camera);
     this._frames++;
@@ -578,8 +619,11 @@ export class Engine {
   // For tests and the page: where you are and what is loaded.
   state() {
     const p = this.player;
-    const things = {};
-    for (const [k, t] of this.things) things[k] = t.status;
+    const things = {}, looks = {};
+    for (const [k, t] of this.things) {
+      things[k] = t.status;
+      looks[k] = { parts: t.parts, glass: t.glass };
+    }
     return {
       ready: this.ready,
       rev: this.rev,
@@ -592,6 +636,7 @@ export class Engine {
       altitude: p.altitude,
       locked: this.input.locked,
       things,
+      looks,
       people: this.peopleList.map((x) => ({ id: x.id, name: x.name, mode: x.mode, p: x.p })),
       figures: [...this.people.figures.keys()],
       connected: this.people.connected,
@@ -610,6 +655,7 @@ export class Engine {
     this.things.clear();
     this.replacing.clear();
     this.hud.dispose();
+    this.look.dispose();
     this.scene.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
       if (o.material) {

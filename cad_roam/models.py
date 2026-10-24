@@ -8,8 +8,10 @@ so ``/room/<id>`` here is the same model as ``/room/<id>`` in Codoc in CAD.
 
 A model stands at its real size: metres per unit from what someone chose here
 (:mod:`cad_roam.settings`), else from its code's comments (:mod:`cad_roam.units`), else
-millimetres (build123d's unit). Under 1.5 m it stands on a pedestal. Its mesh is made from its STL
-when a browser first asks for it (:mod:`cad_roam.meshes`).
+millimetres (build123d's unit). Under 1.5 m it stands on a pedestal. It is drawn from the GLB its
+build wrote beside the STL (Codoc in CAD's ``model.glb``: each part in its colour, see-through
+parts as glass), else from the STL, in one colour (:func:`look`); its mesh is made when a browser
+first asks for it (:mod:`cad_roam.meshes`).
 
 A model as a place (``build``, sent as JSON by ``GET /_roam/world/<owner>/<item>``):
 
@@ -89,16 +91,57 @@ def find(item_id: str) -> str:
     return ""
 
 
+def _named(it: Item, suffix: str) -> list[str]:
+    """The item's files ending in ``suffix``, ``model<suffix>`` first."""
+    names = (str(f.get("path") or "") for f in it.files)
+    return sorted((n for n in names if n.lower().endswith(suffix)), key=lambda n: (n != "model" + suffix, n))
+
+
 def stl_of(it: Item) -> Path | None:
     """The model's STL file (``model.stl`` first), once it has one."""
     if it.path is None:
         return None
-    names = sorted((str(f.get("path") or "") for f in it.files if str(f.get("path") or "").lower().endswith(".stl")), key=lambda n: (n != "model.stl", n))
-    for name in names:
+    for name in _named(it, ".stl"):
         path = it.file(name)
         if path.is_file():
             return path
     return None
+
+
+def glb_of(it: Item, stl: Path) -> Path | None:
+    """The GLB its build wrote beside the STL, under the same name (Codoc in CAD's
+    ``model.glb``), if it has one."""
+    for name in _named(it, ".glb"):
+        path = it.file(name)
+        if path.parent == stl.parent and path.stem == stl.stem and path.is_file():
+            return path
+    return None
+
+
+_passed_over: set[tuple[str, str]] = set()
+
+
+def look(it: Item) -> tuple[Path, meshes.MeshInfo] | None:
+    """The file the model is drawn from, and its size: its GLB when the browser can draw it
+    (each part in its colour) and it has no more than ``CAD_ROAM_MAX_TRIANGLES`` triangles, else
+    its STL (in one colour, simplified when it is too big). None while it has no STL (never built).
+    """
+    stl = stl_of(it)
+    if stl is None:
+        return None
+    glb = glb_of(it, stl)
+    if glb is not None:
+        try:
+            found = meshes.info(COLLECTION, it.owner, it.id, glb)
+            why = f"{found.triangles} triangles" if found.triangles > meshes.MAX_TRIANGLES else ""
+        except (OSError, ValueError) as exc:
+            why = str(exc) or type(exc).__name__
+        if not why:
+            return glb, found
+        if (str(glb), why) not in _passed_over:
+            _passed_over.add((str(glb), why))
+            log.warning("%s: drawn from its STL, in one colour (its GLB: %s)", it.ref, why)
+    return stl, meshes.info(COLLECTION, it.owner, it.id, stl)
 
 
 def thumbnail(it: Item) -> Path | None:
@@ -133,11 +176,11 @@ def margin(w: float, d: float) -> float:
 
 def thing(it: Item) -> dict | None:
     """The model as it stands in its place (see the module's docstring); None without an STL."""
-    stl = stl_of(it)
-    if stl is None:
+    found = look(it)
+    if found is None:
         return None
     key = key_of(it)
-    info = meshes.info(COLLECTION, it.owner, it.id, stl)
+    info = found[1]
     chosen = settings.unit(key)
     if chosen:
         unit, unit_from = chosen, "set"
@@ -191,7 +234,7 @@ def build(key: str) -> dict:
     try:
         t = thing(it)
     except (OSError, ValueError) as exc:
-        log.warning("%s: can't read its STL (%s)", it.ref, exc)
+        log.warning("%s: can't read its model (%s)", it.ref, exc)
         t = None
     if t is not None:
         things.append(t)

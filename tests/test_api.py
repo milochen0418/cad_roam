@@ -4,7 +4,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from cad_roam import meshes, presence
-from tests.conftest import PNG, publish_file, publish_model
+from tests.conftest import PNG, box_triangles, glb_bytes, publish_file, publish_model
 
 KEY = "cad/house00001"
 
@@ -40,6 +40,15 @@ def test_the_place_the_mesh_and_the_picture(client, root):
 
     publish_file(root, "cad-models", "_user", "imported01", "file.generic", "part.stl", b"solid x\nendsolid x\n", thumbnail=PNG)
     assert client.get("/_roam/thumb/_user/imported01").content == PNG
+
+
+def test_a_model_with_colours_sends_its_glb(client, root):
+    glb = glb_bytes([(box_triangles(6, 5, 4), (0.8, 0.2, 0.2, 1.0))])
+    publish_model(root, "chapel0001", "# 1 unit = 1 m\n", (6, 5, 4), title="Chapel", glb=glb)
+    chapel = client.get("/_roam/world/cad/chapel0001").json()["things"][0]
+    r = client.get(chapel["mesh"])
+    assert r.status_code == 200 and r.content == glb and r.headers["cache-control"].endswith("immutable")
+    assert int(r.headers["x-roam-bytes"]) == len(glb)
 
 
 def test_people_see_each_other_move(client):

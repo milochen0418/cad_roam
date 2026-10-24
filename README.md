@@ -1,6 +1,6 @@
 # CAD Roam 🧭
 
-Walk **into** your CAD models. Pick a model made in [Codoc in CAD](https://github.com/milochen0418/codoc_in_cad) and it stands in front of you at its **real size**: walk in like in a first-person game (in through the Taj Mahal's gate, up to its tomb chamber), or fly round it like a drone (over the Sagrada Família's towers). Everyone who opens the same model sees each other there, walking or flying, and can call everyone.
+Walk **into** your CAD models. Pick a model made in [Codoc in CAD](https://github.com/milochen0418/codoc_in_cad) and it stands in front of you at its **real size**, in its colours: walk in like in a first-person game (in through the Taj Mahal's gate, up to its tomb chamber), or fly round it like a drone (over the Sagrada Família's towers). Its glass is glass: in the morning sun the Sagrada Família's blue and green windows glow and throw their colours on the floor and the pillars, in the evening its red and orange ones. Everyone who opens the same model sees each other there, walking or flying, and can call everyone.
 
 Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) for the [re-ddns](https://github.com/milochen0418/re_ddns) Agentic App Store: install it there and open `https://cad-roam.reflex-ddns.com`. A model's address is the same as in Codoc in CAD, with another app name: `https://cad.reflex-ddns.com/room/e5172e80e3` is edited there and walked in at `https://cad-roam.reflex-ddns.com/room/e5172e80e3`. It also runs on its own.
 
@@ -28,7 +28,13 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
 **Two ways to move** (press **F** to switch)
 - **Walk** like in a game: W A S D (or the arrows) to move, the mouse to look (click the view; Esc frees the mouse, or drag to look without it), Space to jump, Shift to run. Walls stop you, stairs and kerbs are stepped up (up to 36 cm), and you fall off ledges.
 - **Drone**: Space up, Shift (or Q) down, the wheel sets its top speed (1 to 160 m/s). It drifts a little and leans into turns like a real drone, bumps into the model, and with **G** flies through walls (ghost). It shows its height above whatever is below it, its speed and its heading.
-- **L** lights a torch for dark insides, **E** (or a click while looking) opens the model's details, **H** shows the keys again. Phones and tablets get a stick and up/down buttons; a gamepad works too (sticks, A up, B down, Y switches).
+- **L** lights a torch for dark insides, **T** moves the sun (morning, day, evening), **E** (or a click while looking) opens the model's details, **H** shows the keys again. Phones and tablets get a stick and up/down buttons; a gamepad works too (sticks, A up, B down, Y switches).
+
+**In its colours**
+- A model built in Codoc in CAD since it has colours shows each part in its colour: the build writes a GLB beside the STL, and CAD Roam draws that. Models built before, and STL files imported on the storage page, are drawn in one stone colour (press Run in Codoc in CAD to get the colours).
+- See-through parts (a colour with an alpha, like `("#2f6fd6", 0.55)`) are glass. From inside, a stained-glass window shows the sky in its colour and glows when the sun is behind it; the sunlight that comes through it falls in its colour on whatever it reaches, its pattern cut by the stone round it.
+- **T** moves the sun: by day it stands high in the south-south-east, behind you as you arrive (+X is east, the front of a model faces south); in the morning it is low in the east, in the evening low in the west. The Sagrada Família's Nativity side (+X) has the cool windows, its Passion side the warm ones, as in the real church.
+- Under a roof, less of the sky's light gets in, so insides are dimmer than outside and their windows' light shows. These lights need *Best (shadows)*; *Fast* shows the colours and the glass only.
 
 **Real size**
 - A model's code says what one unit is, in a comment CAD Roam reads: `# 1 unit = 0.5 m`, `# 單位：1 = 1 公尺`, `# units: mm`. Without one it is in millimetres (build123d's unit). **Details** shows its size in metres and where that size comes from, and lets anyone choose another unit for everyone. Models under 1.5 m stand on a pedestal.
@@ -49,7 +55,8 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
   │ assets/roam/  (three.js)         │ ──────────────────────────────▶ │ models.py: the model, its  │
   │  engine.js  scene, sky, loading  │   GET  /_roam/mesh/…?v=…         │   real size, revisions     │
   │  player.js  walk / drone physics │ ──────────────────────────────▶ │ meshes.py: STL → indexed   │
-  │  things.js  the model            │                                   │   mesh (gz), cached        │
+  │  things.js  the model            │                                   │   mesh, or the GLB (gz)    │
+  │  look.js    colours, glass, sun  │                                   │                            │
   │  people.js  the others           │ ◀──── WS /_roam/ws/<owner>/<id> ▶ │ presence.py: who, where    │
   │  hud.js     keys, map, chips     │   poses ~10/s, "model changed"    │ api.py: watches the models │
   └──────────────────────────────────┘                                   └─────────────┬──────────────┘
@@ -58,7 +65,8 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
                                           /data/collections/cad-models/by-app/cad/<id>/   (re-ddns mounts)
 ```
 
-- **Meshes.** An STL writes every corner of every triangle out (70 MB for the Sagrada Família model, 1.4 million triangles). `cad_roam/meshes.py` sends each corner once and the triangles as indices, gzipped: 9 MB, made in about a second once per build and cached in `CAD_ROAM_HOME` under the STL's size and time, so a rebuilt model gets a new URL and browsers cache the rest for good. Models over `CAD_ROAM_MAX_TRIANGLES` (3 million) are simplified first.
+- **Meshes.** A model is drawn from the GLB its build wrote beside the STL (Codoc in CAD's `model.glb`, each part in its colour), sent gzipped as it is (the Sagrada Família's: 50 MB, 6.4 MB gzipped, 2.3 million triangles); three.js reads it and makes one mesh per colour. Without a GLB, from the STL, which writes every corner of every triangle out (70 MB for an older Sagrada Família, 1.4 million triangles): `cad_roam/meshes.py` sends each corner once and the triangles as indices, gzipped (9 MB). Either is made once per build and cached in `CAD_ROAM_HOME` under the file's size and time, so a rebuilt model gets a new URL and browsers cache the rest for good. STLs over `CAD_ROAM_MAX_TRIANGLES` (3 million) are simplified first; a GLB over it, or one that needs a glTF extension, isn't used (the STL is).
+- **Glass and light** (`assets/roam/look.js`). A part whose colour has an alpha is drawn twice after the rest: once multiplying what is behind it by its colour, once adding its reflections and the sun shining through it. Each frame the glass is also drawn from the sun into a small picture of its colours and depth; surfaces look it up next to their shadow, and those behind glass from the sun get its colour. A picture of the model from straight above, made when it loads, tells which surfaces are under a roof: they get half the sky's light.
 - **Collisions** use [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh): the model gets a bounding-volume tree when it loads; the walker is a capsule, the drone a sphere. three.js and three-mesh-bvh are npm packages bundled by Reflex's Vite (`lib_dependencies`), so nothing comes from a CDN at run time.
 - **Coordinates.** A model's Z is up and its front is -Y (Codoc in CAD's "Front" view); you arrive facing its front, and it stands on the ground at its own z = 0, scaled by its unit.
 - **Presence.** A tab enters a model's place from its Reflex page (so the person comes from the sign-in, not from the browser), then its 3D view opens the model's socket with the tab's id and Reflex token; poses go out about ten times a second while you move. A closed tab leaves at once.
@@ -83,23 +91,25 @@ Open `http://localhost:3000`. On a Mac it reads the same shared folder the local
 | Variable | Default | Meaning |
 |---|---|---|
 | `CAD_ROAM_HOME` | `~/Library/Application Support/cad_roam` (macOS), `~/.local/share/cad_roam` | Meshes made from models, and the sizes people chose |
-| `CAD_ROAM_MAX_TRIANGLES` | `3000000` | Bigger models are simplified to this many triangles |
+| `CAD_ROAM_MAX_TRIANGLES` | `3000000` | Bigger models are simplified to this many triangles (and drawn without their colours) |
 | `CAD_ROAM_CALL_APP` | (chosen when calling) | The call app every call uses |
 | `DDNS_COLLECTIONS_ROOT` | set by re-ddns | Where the collections are |
 
 ## 🧪 Tests
 
 ```bash
-poetry run pytest                              # 27 unit tests: units, meshes, models, links, presence, routes
+poetry run pytest                              # 33 unit tests: units, meshes and GLBs, models, links, presence, routes
 poetry run ./run_test_suite.sh smoke_home      # E2E (Playwright), see testcases/README.md
 ```
 
-The E2E suites build their own small `cad-models` collection (`testcases/fixtures.py`: a house with a door and stairs, a tower, a small part, a model that never built) and never see your models.
+The E2E suites build their own small `cad-models` collection (`testcases/fixtures.py`: a house with a door and stairs, a tower, a small part, a model that never built, a chapel in its colours with a blue window) and never see your models.
 
 ## 🩺 Troubleshooting
 
 - **A model is tiny or huge.** Details says what size CAD Roam uses and why; choose one, or add `# 1 unit = 1 m` to its code.
 - **"Not built yet".** The model has no STL: open it in Codoc in CAD and press Run.
+- **All one colour.** It was last built before Codoc in CAD wrote colours: press Run there once.
+- **No light through the windows.** Press T for the morning or the evening sun (by day it is high and in the south), and choose *Best (shadows)*.
 - **Slow.** Pick *Fast (no shadows)* in the top bar. Browsers without a GPU draw 3D in software.
 - **The mouse doesn't turn the view.** Click the view once (Esc gives the mouse back), or drag.
 

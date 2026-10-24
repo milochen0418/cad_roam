@@ -1,4 +1,5 @@
-"""Models for the browser: an STL file turned into a small indexed mesh, made once per build.
+"""Models for the browser, made once per build: an STL file turned into a small indexed mesh, or
+the GLB a build wrote beside it (each part in its colour), passed on as it is.
 
 An STL lists every triangle with its three corners written out, so each corner appears about six
 times (70 MB for the Sagrada Família model, 1.4 million triangles). The browser gets the corners
@@ -18,9 +19,16 @@ Coordinates stay in the model's units and axes; the browser scales and stands th
 (:mod:`cad_roam.models` says how). A model with more than ``CAD_ROAM_MAX_TRIANGLES`` triangles is
 simplified first (corners closer than a grid cell are merged).
 
-The file is cached under ``CAD_ROAM_HOME/meshes/<collection>/<owner>/<item>/<stamp>.rmsh.gz``;
-``stamp`` changes whenever the STL file does, so a rebuilt model gets a new mesh (and a new
-URL, so browsers never show an old one from their cache).
+A GLB (glTF 2.0, binary) is sent gzipped as it is: three.js reads it in the browser, with each
+part's colour and its see-through parts (Codoc in CAD writes ``model.glb`` next to ``model.stl``,
+in the same units; the Sagrada Família's is 50 MB, 6.4 MB gzipped). Here it is only read for its
+size (:func:`glb_box`); glTF's Y up is the model's Z up again: glTF's (x, y, z) is the model's
+(x, -z, y). A GLB that needs a glTF extension (compressed meshes, ...) isn't used.
+
+The files are cached under ``CAD_ROAM_HOME/meshes/<collection>/<owner>/<item>/`` (a GLB's in
+``glb/`` there) as ``<stamp>.rmsh.gz`` or ``<stamp>.glb.gz``; ``stamp`` changes whenever the
+source file does, so a rebuilt model gets a new mesh (and a new URL, so browsers never show an
+old one from their cache).
 """
 
 from __future__ import annotations
@@ -46,6 +54,12 @@ MAX_TRIANGLES = int(os.environ.get("CAD_ROAM_MAX_TRIANGLES") or 3_000_000)
 _STL_RECORD = np.dtype([("normal", "<f4", (3,)), ("corners", "<f4", (3, 3)), ("attr", "<u2")])
 _FLOAT = re.compile(rb"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 
+GLB_MAGIC = b"glTF"
+_GLB_JSON, _GLB_BIN = 0x4E4F534A, 0x004E4942
+_GLTF_NUMBERS = {5120: "i1", 5121: "u1", 5122: "<i2", 5123: "<u2", 5125: "<u4", 5126: "<f4"}
+_GLTF_WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+_GLTF_TRIANGLES = 4
+
 
 @dataclass(frozen=True)
 class MeshInfo:
@@ -54,6 +68,10 @@ class MeshInfo:
     stamp: str
     box: tuple[float, float, float, float, float, float]  # min x, y, z, max x, y, z
     triangles: int
+
+
+def is_glb(path: Path) -> bool:
+    return path.suffix.lower() == ".glb"
 
 
 def stamp(path: Path) -> str:
@@ -150,6 +168,102 @@ def decode(data: bytes) -> tuple[np.ndarray, np.ndarray, tuple[float, ...]]:
     return positions, faces, box
 
 
+# ---------------------------------------------------------------------------- GLB
+
+def read_glb(path: Path) -> tuple[dict, memoryview]:
+    """The JSON and the binary chunk of a GLB file; ValueError when it isn't one the browser can
+    draw (it reads GLBs without the decoders glTF's extensions need)."""
+    data = memoryview(path.read_bytes())
+    if len(data) < 20 or bytes(data[:4]) != GLB_MAGIC:
+        raise ValueError(f"{path.name} is not a GLB file")
+    doc, blob, at = None, data[:0], 12
+    while at + 8 <= len(data):
+        size, kind = struct.unpack_from("<II", data, at)
+        if kind == _GLB_JSON and doc is None:
+            doc = json.loads(bytes(data[at + 8 : at + 8 + size]))
+        elif kind == _GLB_BIN and not len(blob):
+            blob = data[at + 8 : at + 8 + size]
+        at += 8 + size
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path.name} has no glTF in it")
+    needs = doc.get("extensionsRequired") or []
+    if needs:
+        raise ValueError(f"{path.name} needs {', '.join(map(str, needs))}")
+    return doc, blob
+
+
+def _accessor(doc: dict, blob: memoryview, index: int) -> np.ndarray:
+    acc = doc["accessors"][index]
+    if "bufferView" not in acc or "sparse" in acc:
+        raise ValueError("sparse accessors aren't read")
+    view = doc["bufferViews"][acc["bufferView"]]
+    if "uri" in doc["buffers"][view.get("buffer", 0)]:
+        raise ValueError("buffers outside the GLB aren't read")
+    number = np.dtype(_GLTF_NUMBERS[acc["componentType"]])
+    width = _GLTF_WIDTHS[acc["type"]]
+    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    stride = view.get("byteStride") or number.itemsize * width
+    count = acc["count"]
+    if count and start + stride * (count - 1) + number.itemsize * width > len(blob):
+        raise ValueError("an accessor runs past the end of the file")
+    return np.ndarray((count, width), number, blob, start, (stride, number.itemsize))
+
+
+def _local(node: dict) -> np.ndarray:
+    if "matrix" in node:
+        return np.array(node["matrix"], float).reshape(4, 4).T  # glTF lists it by columns
+    x, y, z, w = node.get("rotation", (0, 0, 0, 1))
+    m = np.eye(4)
+    m[:3, :3] = [
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ]
+    m[:3, :3] *= node.get("scale", (1, 1, 1))
+    m[:3, 3] = node.get("translation", (0, 0, 0))
+    return m
+
+
+def _placed(doc: dict):
+    """Every primitive the GLB's scene draws, with its node's matrix (a mesh used by several
+    nodes comes once for each)."""
+    scenes = doc.get("scenes") or []
+    roots = scenes[doc.get("scene", 0)].get("nodes", []) if scenes else []
+    todo = [(index, np.eye(4), 0) for index in roots]
+    while todo:
+        index, parent, depth = todo.pop()
+        if depth > 100:
+            raise ValueError("its nodes loop")
+        node = doc["nodes"][index]
+        world = parent @ _local(node)
+        todo.extend((child, world, depth + 1) for child in node.get("children", []))
+        if "mesh" in node:
+            for primitive in doc["meshes"][node["mesh"]].get("primitives", []):
+                yield world, primitive
+
+
+def glb_box(path: Path) -> tuple[tuple[float, ...], int]:
+    """A GLB's bounding box in the model's units and axes (Z up), and how many triangles it draws."""
+    doc, blob = read_glb(path)
+    lo, hi, triangles = np.full(3, np.inf), np.full(3, -np.inf), 0
+    for world, primitive in _placed(doc):
+        attributes = primitive.get("attributes") or {}
+        if primitive.get("mode", _GLTF_TRIANGLES) != _GLTF_TRIANGLES or "POSITION" not in attributes:
+            continue
+        points = _accessor(doc, blob, attributes["POSITION"]).astype(np.float64) @ world[:3, :3].T + world[:3, 3]
+        points = points[np.isfinite(points).all(axis=1)]
+        if not len(points):
+            continue
+        lo, hi = np.minimum(lo, points.min(axis=0)), np.maximum(hi, points.max(axis=0))
+        corners = doc["accessors"][primitive["indices"]]["count"] if "indices" in primitive else len(points)
+        triangles += corners // 3
+    if not triangles:
+        raise ValueError(f"{path.name} has no triangles")
+    # Rounded: turning Y up back to Z up leaves noise (-1e-15 for a model standing on 0).
+    box = (lo[0], -hi[2], lo[1], hi[0], -lo[2], hi[1])
+    return tuple(round(float(v), 9) + 0.0 for v in box), triangles
+
+
 # ---------------------------------------------------------------------------- the cache
 
 _locks: dict[str, threading.Lock] = {}
@@ -162,8 +276,8 @@ def _lock(key: str) -> threading.Lock:
         return _locks.setdefault(key, threading.Lock())
 
 
-def _folder(collection: str, owner: str, item_id: str) -> Path:
-    return paths.mesh_cache() / collection / owner / item_id
+def _folder(collection: str, owner: str, item_id: str, source: Path) -> Path:
+    return paths.mesh_cache() / collection / owner / item_id / ("glb" if is_glb(source) else "")
 
 
 def _write(path: Path, data: bytes) -> None:
@@ -176,48 +290,56 @@ def _write(path: Path, data: bytes) -> None:
 def _prune(folder: Path, st: str) -> None:
     """Removes what was made for earlier builds of the model."""
     for old in folder.glob("*"):
-        if not old.name.startswith(st + ".") and not old.name.endswith(".tmp"):
+        if not old.name.startswith(st + ".") and not old.name.endswith(".tmp") and not old.is_dir():
             old.unlink(missing_ok=True)
 
 
-def info(collection: str, owner: str, item_id: str, stl: Path) -> MeshInfo:
-    """The model's size and triangle count, from the cache or read from its STL."""
-    st = stamp(stl)
-    key = (str(stl), st)
+def info(collection: str, owner: str, item_id: str, source: Path) -> MeshInfo:
+    """The model's size and triangle count, from the cache or read from its STL or GLB
+    (ValueError when the file can't be drawn)."""
+    st = stamp(source)
+    key = (str(source), st)
     found = _info.get(key)
     if found is not None:
         return found
-    sidecar = _folder(collection, owner, item_id) / f"{st}.json"
+    sidecar = _folder(collection, owner, item_id, source) / f"{st}.json"
     try:
         data = json.loads(sidecar.read_text("utf-8"))
         found = MeshInfo(st, tuple(data["box"]), int(data["triangles"]))
     except (OSError, ValueError, KeyError, TypeError):
-        tris = _finite(read_triangles(stl))
-        flat = tris.reshape(-1, 3)
-        found = MeshInfo(st, box_of(flat), len(tris))
+        if is_glb(source):
+            box, triangles = glb_box(source)
+            found = MeshInfo(st, box, triangles)
+        else:
+            tris = _finite(read_triangles(source))
+            found = MeshInfo(st, box_of(tris.reshape(-1, 3)), len(tris))
         _write(sidecar, json.dumps({"box": found.box, "triangles": found.triangles}).encode())
         _prune(sidecar.parent, st)
     _info[key] = found
     return found
 
 
-def mesh_file(collection: str, owner: str, item_id: str, stl: Path) -> Path:
-    """The gzipped mesh of this build of the model, made now if it isn't cached yet.
+def mesh_file(collection: str, owner: str, item_id: str, source: Path) -> Path:
+    """What the browser draws this build of the model from, gzipped: an STL's mesh or the GLB.
+    Made now if it isn't cached yet.
 
-    Slow for big models (seconds): call it from a thread. Older builds' meshes are removed.
+    Slow for big models (seconds): call it from a thread. Older builds' files are removed.
     """
-    st = stamp(stl)
-    folder = _folder(collection, owner, item_id)
-    target = folder / f"{st}.rmsh.gz"
+    st = stamp(source)
+    folder = _folder(collection, owner, item_id, source)
+    target = folder / f"{st}.{'glb' if is_glb(source) else 'rmsh'}.gz"
     with _lock(str(folder)):
         if target.is_file():
             return target
-        tris = _finite(read_triangles(stl))
-        positions, faces = index(tris)
-        del tris
-        if len(faces) > MAX_TRIANGLES:
-            positions, faces = simplify(positions, faces, MAX_TRIANGLES)
-        data = encode(positions, faces, box_of(positions))
+        if is_glb(source):
+            data = source.read_bytes()
+        else:
+            tris = _finite(read_triangles(source))
+            positions, faces = index(tris)
+            del tris
+            if len(faces) > MAX_TRIANGLES:
+                positions, faces = simplify(positions, faces, MAX_TRIANGLES)
+            data = encode(positions, faces, box_of(positions))
         _write(target, gzip.compress(data, compresslevel=5))
         _prune(folder, st)
         return target

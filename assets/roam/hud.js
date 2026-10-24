@@ -72,6 +72,7 @@ export class Hud {
       ["Wheel", this.t("k_speed", "drone speed")],
       ["G", this.t("k_ghost", "drone through walls")],
       ["L", this.t("k_light", "torch")],
+      ["T", this.t("k_sun", "the sun: morning, day, evening")],
       ["Esc", this.t("k_esc", "free the mouse")],
     ];
     this.hint.textContent = this.touch ? this.t("touch_hint", "Drag to look, use the stick to move") : this.t("click_to_look", "Click the view to look around");
@@ -83,12 +84,14 @@ export class Hud {
     }
   }
 
-  setMode(mode, ghost, light) {
+  setMode(mode, ghost, light, sun) {
     this.walkBtn.classList.toggle("is-on", mode === "walk");
     this.flyBtn.classList.toggle("is-on", mode === "fly");
     const flags = [];
     if (mode === "fly" && ghost) flags.push(this.t("ghost", "Ghost: through walls"));
     if (light) flags.push(this.t("light", "Torch on"));
+    if (sun === "morning") flags.push(this.t("sun_morning", "Morning sun"));
+    if (sun === "evening") flags.push(this.t("sun_evening", "Evening sun"));
     this.flags.textContent = flags.join(" · ");
     this.root.dataset.mode = mode;
   }
