@@ -1,9 +1,9 @@
 // How a model with colours looks (drawn from the GLB its build wrote beside the STL, see
 // cad_roam/models.py): each part in its colour, see-through parts (glTF's alpha under 1) as
 // glass, and parts that give light (glTF's emissive colour: lamps) lit in their colour, also in
-// the dark (their light doesn't fall on anything yet). Glass tints what is behind it (the sky
-// through a stained-glass window), glows where the sun is behind it, and lets the sun through in
-// its colour: the floor and the pillars it falls on take that colour.
+// the dark. Glass tints what is behind it (the sky through a stained-glass window), glows where
+// the sun is behind it, and lets the sun through in its colour: the floor and the pillars it falls
+// on take that colour.
 //
 // Glass is drawn twice, after everything solid: once multiplying what is behind it by its colour
 // (each face by the square root: a pane has two), once adding its own light (reflections, and
@@ -15,20 +15,16 @@
 // from the sun than the glass at that spot, the sun reaches them in the glass's colour. Whether
 // it gets there at all is still the shadows' say (glass casts none).
 //
-// Under a roof: the sky lights the world from everywhere (a hemisphere light), insides too, so
-// a church would be as bright inside as out and its windows' light wouldn't show. The solid parts
-// of the model are drawn once from straight above (their depth): a surface with something over it
-// (looked up a little off the surface, so outer walls are not under their own top) gets only part
-// of the sky's light.
+// All the other light (the sky's, through openings and glass, the lamps', and what floors, walls
+// and vaults throw back) comes from light.js: in and round a model, surfaces take it instead of
+// the sky's light from everywhere.
 
 import * as THREE from "three";
+import { Light, RECEIVE_GRID } from "./light.js";
 
 const LIGHT_MAP = 2048;
-const SKY_MAP = 2048;
-// The layer the model's solid parts are on as well, for the picture from above.
+// The layer the model's solid parts are on as well, for the pictures of them from the sun.
 export const SOLID_LAYER = 1;
-// How much of the sky's light reaches under a roof.
-const COVERED = 0.5;
 // What of the light around it a part that gives light still shows (its shape): a lamp is seen in
 // its own light, drawn without the view's tone mapping, which pales a bright warm lamp to cream
 // and a blue one to white. At glow 1 it shows its colour as it is, by day and in the dark.
@@ -58,24 +54,7 @@ const RECEIVE_VERTEX = /* glsl */ `
 
 const RECEIVE_PARS = /* glsl */ `
 varying vec3 vRoamWorld;
-uniform sampler2D roamSkyDepth;
-uniform mat4 roamSkyMatrix;
-uniform float roamSkyOn;
-uniform float roamSkyBias;
-uniform vec2 roamSkyTexel;
-float roamSkyLight( vec3 viewNormal ) {
-	if ( roamSkyOn < 0.5 ) return 1.0;
-	vec3 n = inverseTransformDirection( viewNormal, viewMatrix );
-	vec4 c = roamSkyMatrix * vec4( vRoamWorld + n * 0.6, 1.0 );
-	vec3 p = c.xyz / c.w;
-	if ( p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 ) return 1.0;
-	float under = 0.0;
-	for ( int k = 0; k < 5; k ++ ) {
-		vec2 o = k == 0 ? vec2( 0.0 ) : vec2( k == 1 ? 1.5 : k == 2 ? -1.5 : 0.0, k == 3 ? 1.5 : k == 4 ? -1.5 : 0.0 );
-		under += p.z > texture2D( roamSkyDepth, p.xy + o * roamSkyTexel ).r + roamSkyBias ? 0.2 : 0.0;
-	}
-	return mix( 1.0, ${COVERED.toFixed(2)}, under );
-}
+${RECEIVE_GRID}
 #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
 uniform sampler2D roamGlassColor;
 uniform sampler2D roamGlassDepth;
@@ -98,7 +77,7 @@ const RECEIVE_LIGHTS = patched(THREE.ShaderChunk.lights_fragment_begin, [
 		#if UNROLLED_LOOP_INDEX == 0
 		directLight.color *= roamGlassLight( vDirectionalShadowCoord[ i ] );
 		#endif`, true],
-  [SKY_BLOCK, "#ifdef USE_LIGHT_PROBES_GRID", "irradiance *= roamSkyLight( geometryNormal );\n\n\t", false],
+  [SKY_BLOCK, "#ifdef USE_LIGHT_PROBES_GRID", "irradiance = roamGridLight( irradiance, geometryNormal );\n\n\t", false],
 ]);
 
 const SHINE_LIGHTS = patched(THREE.ShaderChunk.lights_fragment_begin, [
@@ -180,29 +159,25 @@ function shining(source, t, flat) {
 }
 
 export class Look {
-  constructor(renderer, world, sun) {
+  // daylight: the engine's sky light (a hemisphere light) and its light everywhere (ambient).
+  constructor(renderer, world, sun, daylight) {
     this.renderer = renderer;
     this.world = world; // the scene the models are in
     this.sun = sun;
+    this.solidLayer = SOLID_LAYER;
     this.scene = new THREE.Scene(); // the glass, as the sun sees it
     this.glass = 0;
     this.target = null;
     this.depthOnly = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+    // The light in and round the models (light.js).
+    this.light = new Light(this, daylight.sky, daylight.fill);
     this.uniforms = {
       roamGlassColor: { value: null },
       roamGlassDepth: { value: null },
       roamGlassOn: { value: 0 },
       roamGlassBias: { value: 0 },
-      roamSkyDepth: { value: null },
-      roamSkyMatrix: { value: new THREE.Matrix4() },
-      roamSkyOn: { value: 0 },
-      roamSkyBias: { value: 0 },
-      roamSkyTexel: { value: new THREE.Vector2(1 / SKY_MAP, 1 / SKY_MAP) },
+      ...this.light.uniforms,
     };
-    this.skyCamera = new THREE.OrthographicCamera();
-    this.skyCamera.layers.set(SOLID_LAYER);
-    this.skyTarget = null;
-    this.skyDirty = false; // solid parts came or went: draw them from above again
     this._clear = new THREE.Color();
   }
 
@@ -210,12 +185,14 @@ export class Look {
     return this.renderer.shadowMap.enabled && this.sun.castShadow;
   }
 
-  // Lets the sun reach a surface in the colour of the glass it came through, and the sky less
-  // under a roof.
-  receive(material) {
+  // Lets the sun reach a surface in the colour of the glass it came through, and the light in and
+  // round the models (light.js) fall on it; not on a part that gives light (`lit` false), which
+  // shows its own.
+  receive(material, lit = true) {
     const uniforms = this.uniforms;
     material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
+      if (!lit) shader.uniforms.roamGridOn = { value: 0 };
       shader.vertexShader = shader.vertexShader
         .replace("#include <common>", "#include <common>\nvarying vec3 vRoamWorld;")
         .replace("#include <worldpos_vertex>", `#include <worldpos_vertex>${RECEIVE_VERTEX}`);
@@ -227,12 +204,11 @@ export class Look {
     return material;
   }
 
-  // A solid part of a model: it casts shadows and roofs what is under it.
+  // A solid part of a model: it casts shadows and shows in the pictures from the sun.
   solid(mesh) {
     mesh.castShadow = this.shadows;
     mesh.receiveShadow = true;
     mesh.layers.enable(SOLID_LAYER);
-    this.skyDirty = true;
     return mesh;
   }
 
@@ -251,7 +227,7 @@ export class Look {
         toneMapped: !glowing,
         side: THREE.DoubleSide,
         flatShading: flat,
-      }));
+      }), !glowing);
       return [this.solid(new THREE.Mesh(geometry, material))];
     }
     const t = transmittance(source);
@@ -269,10 +245,31 @@ export class Look {
     return [tint, shine];
   }
 
-  // A model that goes: its glass out of the sun's picture, its roofs out of the one from above.
+  // A model's parts (from things.js: its geometries, in world coordinates, and their materials),
+  // for the light in and round it (light.js): what each part's surfaces stop, colour, give or let
+  // through. `owner` is the model's group.
+  add(owner, parts) {
+    const items = parts.map(({ geometry, material }) => {
+      const c = material.color, glowing = isGlowing(material);
+      const e = glowing ? material.emissive.clone().multiplyScalar(material.emissiveIntensity ?? 1) : null;
+      // Glass lets light through in its colour as the sun through it falls (vivid).
+      const t = isGlass(material) ? vivid(transmittance(material)) : null;
+      return {
+        position: geometry.attributes.position.array,
+        index: geometry.index ? geometry.index.array : null,
+        box: geometry.boundingBox,
+        colour: [c.r, c.g, c.b],
+        light: e && [e.r, e.g, e.b],
+        glass: t && [t.r, t.g, t.b],
+      };
+    });
+    this.light.set(owner, items);
+  }
+
+  // A model that goes: its glass out of the sun's picture, its parts out of the light.
   release(object) {
+    this.light.remove(object);
     object.traverse((o) => {
-      if (o.layers && o.layers.isEnabled(SOLID_LAYER)) this.skyDirty = true;
       const light = o.userData && o.userData.light;
       if (!light) return;
       this.scene.remove(light);
@@ -282,12 +279,16 @@ export class Look {
     });
   }
 
-  // Before each frame, once the sun is where it will be: the glass as the sun sees it (and, when
-  // the model changed, the model from above).
-  frame() {
+  // How bright the view is, as eyes used to the dark where you are (light.js): times the exposure.
+  get brightness() {
+    return this.light.brightness;
+  }
+
+  // Before each frame, once the sun and `camera` are where they will be (dt: seconds since the
+  // last one): the next steps of the light in the models, and the glass as the sun sees it.
+  frame(camera = null, dt = 0) {
     const on = this.shadows;
-    if (on && this.skyDirty) this._drawSky();
-    this.uniforms.roamSkyOn.value = on && this.skyTarget ? 1 : 0;
+    this.light.frame(camera, dt);
     this.uniforms.roamGlassOn.value = on && this.glass > 0 ? 1 : 0;
     if (!this.uniforms.roamGlassOn.value) return;
     const r = this.renderer, sun = this.sun, cam = sun.shadow.camera;
@@ -312,58 +313,6 @@ export class Look {
     });
   }
 
-  // The model's solid parts from straight above, over all of them: their depth.
-  _drawSky() {
-    this.skyDirty = false;
-    const box = new THREE.Box3(), part = new THREE.Box3();
-    this.world.traverse((o) => {
-      if (!o.isMesh || !o.layers.isEnabled(SOLID_LAYER) || !o.geometry.boundingBox) return;
-      box.union(part.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
-    });
-    if (box.isEmpty()) {
-      this.uniforms.roamSkyDepth.value = null;
-      if (this.skyTarget) {
-        this.skyTarget.depthTexture.dispose();
-        this.skyTarget.dispose();
-      }
-      this.skyTarget = null;
-      return;
-    }
-    if (!this.skyTarget) {
-      this.skyTarget = new THREE.WebGLRenderTarget(SKY_MAP, SKY_MAP, {
-        depthTexture: new THREE.DepthTexture(SKY_MAP, SKY_MAP),
-        generateMipmaps: false,
-      });
-      this.uniforms.roamSkyDepth.value = this.skyTarget.depthTexture;
-    }
-    const cam = this.skyCamera, c = box.getCenter(new THREE.Vector3());
-    const half = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) / 2 + 2;
-    cam.left = cam.bottom = -half;
-    cam.right = cam.top = half;
-    cam.near = 1;
-    cam.far = box.max.y - box.min.y + 6;
-    cam.position.set(c.x, box.max.y + 3, c.z);
-    cam.up.set(0, 0, -1);
-    cam.lookAt(c.x, box.min.y, c.z);
-    cam.updateProjectionMatrix();
-    cam.updateMatrixWorld();
-    this.uniforms.roamSkyMatrix.value
-      .set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1)
-      .multiply(cam.projectionMatrix)
-      .multiply(cam.matrixWorldInverse);
-    this.uniforms.roamSkyBias.value = 0.3 / (cam.far - cam.near);
-    this._into(this.skyTarget, () => {
-      const scene = this.world, override = scene.overrideMaterial, background = scene.background, fog = scene.fog;
-      scene.overrideMaterial = this.depthOnly;
-      scene.background = null;
-      scene.fog = null;
-      this.renderer.render(scene, cam);
-      scene.overrideMaterial = override;
-      scene.background = background;
-      scene.fog = fog;
-    });
-  }
-
   // Draws into a target of ours, cleared to white and far, and leaves the renderer as it was.
   _into(target, draw) {
     const r = this.renderer;
@@ -383,11 +332,11 @@ export class Look {
 
   dispose() {
     this.release(this.scene);
+    this.light.dispose();
     this.depthOnly.dispose();
-    for (const t of [this.target, this.skyTarget]) {
-      if (!t) continue;
-      t.depthTexture.dispose();
-      t.dispose();
+    if (this.target) {
+      this.target.depthTexture.dispose();
+      this.target.dispose();
     }
   }
 }

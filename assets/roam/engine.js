@@ -17,6 +17,7 @@ import { Sky } from "three/addons/objects/Sky.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { Hud } from "./hud.js";
 import { Input } from "./input.js";
+import { LIGHT_BYTES } from "./light.js";
 import { Look } from "./look.js";
 import { People } from "./people.js";
 import { FLY, Player, WALK } from "./player.js";
@@ -61,6 +62,8 @@ function savedTime() {
 }
 
 const LOADS_AT_ONCE = 2;
+// The view's exposure outside, in the sun (indoors it gets brighter, see light.js).
+const EXPOSURE = 0.72;
 
 function grassTexture() {
   const c = document.createElement("canvas");
@@ -128,6 +131,7 @@ export class Engine {
     this.hud.showKeys(true);
     this.people = new People({
       scene: this.scene,
+      look: this.look,
       wsUrl: this.url(`/_roam/ws/${this.path}`).replace(/^http/, "ws"),
       peer: (opts.me || {}).peer,
       onRejoin: () => this._emit({ type: "rejoin" }),
@@ -170,7 +174,7 @@ export class Engine {
     r.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.quality === "low" ? 1 : 1.75));
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping;
-    r.toneMappingExposure = 0.72;
+    r.toneMappingExposure = EXPOSURE;
     r.shadowMap.enabled = this.quality !== "low";
     r.shadowMap.type = THREE.PCFShadowMap;
     this.renderer = r;
@@ -216,8 +220,9 @@ export class Engine {
     this.setTime(savedTime());
     this._shadowRange(120);
     scene.add(sun, sun.target);
-    // Models' colours and glass, and the sunlight through glass (look.js).
-    this.look = new Look(this.renderer, scene, sun);
+    // Models' colours and glass, the sunlight through glass, and the light inside them (look.js,
+    // light.js).
+    this.look = new Look(this.renderer, scene, sun, { sky: this.skyLight, fill: this.fillLight });
 
     // In 400 m squares: drawn in software, one 40 km triangle loses so much depth that the grass
     // came through floors 8 cm above it.
@@ -425,7 +430,8 @@ export class Engine {
     const t = thing.data;
     this.input.unlock();
     this.hud.askBig(
-      { key: t.key, mesh: t.mesh, title: t.title, tris: t.tris, limit: t.big.limit, bytes: t.big.bytes, memory: t.tris * BYTES_PER_TRIANGLE },
+      // With shadows, its light inside too (light.js).
+      { key: t.key, mesh: t.mesh, title: t.title, tris: t.tris, limit: t.big.limit, bytes: t.big.bytes, memory: t.tris * BYTES_PER_TRIANGLE + (this.look.shadows ? LIGHT_BYTES : 0) },
       (load) => {
         BIG.set(thing.key, load);
         this._schedule();
@@ -659,7 +665,9 @@ export class Engine {
       this._slow = 0;
       this._tick();
     }
-    this.look.frame();
+    this.look.frame(this.camera, dt);
+    // Indoors, brighter: as eyes used to the dark (light.js).
+    this.renderer.toneMappingExposure = EXPOSURE * this.look.brightness;
     this.renderer.render(this.scene, this.camera);
     this.labelsRenderer.render(this.scene, this.camera);
     this._frames++;
@@ -715,6 +723,7 @@ export class Engine {
       locked: this.input.locked,
       things,
       looks,
+      light: this.look.light.state(),
       time: this.time,
       people: this.peopleList.map((x) => ({ id: x.id, name: x.name, mode: x.mode, p: x.p })),
       figures: [...this.people.figures.keys()],

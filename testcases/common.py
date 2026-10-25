@@ -95,6 +95,43 @@ def place(page: Page, x: float, y: float, z: float, yaw: float = 0.0, pitch: flo
     page.evaluate("([x, y, z, yaw, pitch]) => window.__roam.player.place(x, y, z, yaw, pitch)", [x, y, z, yaw, pitch])
 
 
+def wait_light(page: Page, timeout: float = 240.0) -> dict:
+    """Waits until the light inside the models (assets/roam/light.js) is worked out, all its rounds
+    (slow in software WebGL), and returns its state."""
+    wait_for(lambda: (state(page).get("light") or {}).get("done"), "the light worked out", timeout)
+    return state(page)["light"]
+
+
+def light_at(page: Page, key: str, x: float, y: float, z: float, normal=(0.0, 0.0, 0.0)) -> dict | None:
+    """The light falling at a point of a model (model coordinates: metres, Z up, -Y the front) on a
+    face turned to ``normal`` (model coordinates too; (0, 0, 0): on all sides), as the surfaces
+    there get it: {"light": [r, g, b], "sure": 0..1}, or None outside the light's grid."""
+    return page.evaluate(
+        """([key, x, y, z, nx, ny, nz]) => {
+          const e = window.__roam, t = e.things.get(key).data;
+          const [x0, y0, , x1, y1] = t.box;
+          const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, u = t.unit;
+          const V = e.camera.position.constructor;
+          const p = new V((x - cx) * u + t.x, (z - t.ground) * u + t.base, -(y - cy) * u + t.z);
+          return e.look.light.sample(p, new V(nx, nz, -ny));
+        }""",
+        [key, x, y, z, *normal],
+    )
+
+
+def model_place(page: Page, key: str, x: float, y: float, z: float, yaw: float = 0.0, pitch: float = 0.0) -> None:
+    """Puts you at a point of a model (model coordinates: metres, Z up; your feet there)."""
+    page.evaluate(
+        """([key, x, y, z, yaw, pitch]) => {
+          const e = window.__roam, t = e.things.get(key).data;
+          const [x0, y0, , x1, y1] = t.box;
+          const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, u = t.unit;
+          e.player.place((x - cx) * u + t.x, (z - t.ground) * u + t.base, -(y - cy) * u + t.z, yaw, pitch);
+        }""",
+        [key, x, y, z, yaw, pitch],
+    )
+
+
 def sim_time(page: Page) -> float:
     return page.evaluate("() => window.__roam._t")
 

@@ -2,8 +2,9 @@
 builds write them): each part in its colour, its window as glass, its lamp glowing. At 10:30 the
 sun doesn't come in; T jumps on to 16:30 and 7:30, and in the morning sun the floor and the wall in
 front of its blue east window turn blue; dragged to 16:30 (the sun in the west), the blue is gone
-again, while the lamp, seen from under it, is bright in its warm colour against the dim roof; the
-time is still there after a reload. The house, which has only an STL, is drawn in one colour."""
+again, while the lamp, seen from under it, is bright in its warm colour, far brighter than the roof
+round it (which it lights: the light suite); the time is still there after a reload. The house,
+which has only an STL, is drawn in one colour."""
 
 from __future__ import annotations
 
@@ -97,8 +98,8 @@ def main() -> int:
         log("blue at 16:30:", round(evening, 3))
         assert evening < morning / 5, (morning, evening)
 
-        # The lamp gives light: from under it, in the evening, it is bright in its warm colour and
-        # the roof round it dim.
+        # The lamp gives light: from under it, in the evening, it is bright in its warm colour, far
+        # brighter than the roof round it.
         place(page, 0.0, 0, 0, 0.0, 1.57)
         settle(page, 0.5)
         lamp, roof = page.evaluate(LAMP_AND_ROOF)
@@ -106,7 +107,7 @@ def main() -> int:
         shot(page, "03-lamp")
         # Its own colour as it is (fixtures.LAMP in sRGB), in the dark.
         assert all(abs(a - b) <= 12 for a, b in zip(lamp, (255, 196, 118))), lamp
-        assert sum(roof) < 120, roof
+        assert sum(roof) < 0.5 * sum(lamp), (lamp, roof)
 
         # Its window from inside, the morning sun behind it.
         page.fill(".rm-sun-range", "7.5")

@@ -315,6 +315,7 @@ export class Thing {
   }
 
   _build(parts) {
+    const lit = [];
     for (const { geometry: geo, material } of parts) {
       geo.computeBoundingBox();
       geo.computeBoundingSphere();
@@ -326,11 +327,14 @@ export class Thing {
         mesh.userData.key = this.key;
         this.group.add(mesh);
       }
+      lit.push({ geometry: geo, material: material || meshes[0].material });
       this.pickables.push(meshes[0]);
       this.parts++;
       if (meshes[0].userData.glass) this.glass++;
       if (material && isGlowing(material)) this.glow++;
     }
+    // Its light inside: the sky's through its openings and glass, its lamps', what it throws back.
+    this.ctx.look.add(this.group, lit);
     if (this.placeholder) {
       this.group.remove(this.placeholder);
       disposeTree(this.placeholder);

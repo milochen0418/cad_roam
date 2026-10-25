@@ -61,13 +61,15 @@ function drone(color) {
 }
 
 class Figure {
-  constructor(person, scene) {
+  constructor(person, scene, look) {
     this.id = person.id;
     this.scene = scene;
     this.group = new THREE.Group();
     this.walker = walker(person.color);
     this.drone = drone(person.color);
     this.group.add(this.walker, this.drone);
+    // Lit as the place they are in (inside a church too).
+    if (look) this.group.traverse((o) => { if (o.isMesh && o.material.isMeshStandardMaterial) look.receive(o.material); });
     const tag = document.createElement("div");
     tag.className = "rm-person";
     tag.style.setProperty("--c", person.color);
@@ -119,8 +121,9 @@ class Figure {
 }
 
 export class People {
-  constructor({ scene, wsUrl, peer, onRejoin, onWorld, onChange, onWelcome }) {
+  constructor({ scene, look, wsUrl, peer, onRejoin, onWorld, onChange, onWelcome }) {
     this.scene = scene;
+    this.look = look;
     this.wsUrl = wsUrl;
     this.peer = peer;
     this.onRejoin = onRejoin;
@@ -206,7 +209,7 @@ export class People {
       here.add(person.id);
       const f = this.figures.get(person.id);
       if (f) f.update(person);
-      else this.figures.set(person.id, new Figure(person, this.scene));
+      else this.figures.set(person.id, new Figure(person, this.scene, this.look));
     }
     for (const [id, f] of this.figures) {
       if (!here.has(id)) {
