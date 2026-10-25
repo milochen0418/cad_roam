@@ -1,7 +1,7 @@
-// What is drawn over the 3D view: the crosshair and what it points at, walk / drone and the
-// drone's readings, the sun's time, the keys, models still loading (or left unloaded), the
-// question before a big model loads, the map, the people here (a click flies to them) and, on
-// touch screens, a stick and buttons.
+// What is drawn over the 3D view: the crosshair and what it points at, walk / drone, your eyes /
+// from behind, the drone's readings, the sun's time, the keys, models still loading (or left
+// unloaded), the question before a big model loads, the map, the people here (a click flies to
+// them) and, on touch screens, a stick and buttons.
 
 import { initials } from "./people.js";
 
@@ -24,7 +24,7 @@ function bytes(n) {
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
 export class Hud {
-  constructor(root, { labels, touch, onMode, onFollow, onStick, onRise, onAction, sunTimes, onSunTime }) {
+  constructor(root, { labels, touch, onMode, onView, onFollow, onStick, onRise, onAction, sunTimes, onSunTime }) {
     this.labels = labels || {};
     this.touch = touch;
     this.root = el("div", "rm-hud", root);
@@ -36,7 +36,8 @@ export class Hud {
 
     const bottom = el("div", "rm-bottom", this.root);
     this.tele = el("div", "rm-tele", bottom);
-    const modes = el("div", "rm-modes", bottom);
+    const row = el("div", "rm-row", bottom);
+    const modes = el("div", "rm-modes", row);
     this.walkBtn = el("button", "rm-mode-btn", modes);
     this.flyBtn = el("button", "rm-mode-btn", modes);
     this.walkBtn.type = this.flyBtn.type = "button";
@@ -44,7 +45,16 @@ export class Hud {
     this.flyBtn.id = "rm-fly";
     this.walkBtn.addEventListener("click", (e) => { e.stopPropagation(); onMode("walk"); });
     this.flyBtn.addEventListener("click", (e) => { e.stopPropagation(); onMode("fly"); });
-    for (const b of [this.walkBtn, this.flyBtn]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    // Through your eyes, or yourself from a little behind (view.js).
+    const views = el("div", "rm-modes", row);
+    this.eyesBtn = el("button", "rm-mode-btn", views);
+    this.behindBtn = el("button", "rm-mode-btn", views);
+    this.eyesBtn.type = this.behindBtn.type = "button";
+    this.eyesBtn.id = "rm-eyes";
+    this.behindBtn.id = "rm-behind";
+    this.eyesBtn.addEventListener("click", (e) => { e.stopPropagation(); onView("eyes"); });
+    this.behindBtn.addEventListener("click", (e) => { e.stopPropagation(); onView("behind"); });
+    for (const b of [this.walkBtn, this.flyBtn, this.eyesBtn, this.behindBtn]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
     // The sun's time of day: dragged, the sun moves along its path (engine.js).
     this.sun = el("label", "rm-sun", bottom);
     el("span", "rm-sun-icon", this.sun, "☀");
@@ -106,6 +116,9 @@ export class Hud {
     this.walkBtn.textContent = this.t("walk", "Walk");
     this.flyBtn.textContent = this.t("fly", "Drone");
     this.walkBtn.title = this.flyBtn.title = this.t("mode_title", "F switches between walking and flying");
+    this.eyesBtn.textContent = this.t("view_eyes", "Eyes");
+    this.behindBtn.textContent = this.t("view_behind", "Behind");
+    this.eyesBtn.title = this.behindBtn.title = this.t("view_title", "V switches between your own eyes and seeing yourself from behind");
     this.sun.title = this.t("sun_time", "The sun's time of day (T: morning, day, evening)");
     this.sunRange.setAttribute("aria-label", this.sun.title);
     const keys = this.touch ? [] : [
@@ -114,6 +127,7 @@ export class Hud {
       ["Space", this.t("k_jump", "jump · drone: up")],
       ["Shift", this.t("k_run", "run · drone: down")],
       ["F", this.t("k_mode", "walk / drone")],
+      ["V", this.t("k_view", "your eyes / from behind")],
       ["E", this.t("k_open", "details of what you look at")],
       ["Wheel", this.t("k_speed", "drone speed")],
       ["G", this.t("k_ghost", "drone through walls")],
@@ -184,6 +198,12 @@ export class Hud {
     if (light) flags.push(this.t("light", "Torch on"));
     this.flags.textContent = flags.join(" · ");
     this.root.dataset.mode = mode;
+  }
+
+  setView(view) {
+    this.eyesBtn.classList.toggle("is-on", view === "eyes");
+    this.behindBtn.classList.toggle("is-on", view === "behind");
+    this.root.dataset.view = view;
   }
 
   // The sun's time (hours) on the slider and as hh:mm.

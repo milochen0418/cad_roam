@@ -1,6 +1,6 @@
 // CAD Roam's 3D view: the sky and the ground, the model in its place (things.js) in its colours
-// and with its glass (look.js), you walking or flying (player.js), the others there (people.js)
-// and what is drawn over it all (hud.js).
+// and with its glass (look.js), you walking or flying (player.js), seen through your eyes or
+// from behind (view.js), the others there (people.js) and what is drawn over it all (hud.js).
 //
 // The place comes from GET /_roam/world/<owner>/<item> (cad_roam/models.py) and is fetched again
 // whenever the server says it changed (the model rebuilt in Codoc in CAD, a size someone chose);
@@ -22,6 +22,7 @@ import { Look } from "./look.js";
 import { People } from "./people.js";
 import { FLY, Player, WALK } from "./player.js";
 import { BYTES_PER_TRIANGLE, Thing, needsRebuild } from "./things.js";
+import { BEHIND, EYES, View } from "./view.js";
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
@@ -113,11 +114,14 @@ export class Engine {
     this._setupRenderer();
     this._setupScene();
     this.player = new Player();
+    this.view = new View(this.scene, this.look);
+    this.view.setColor((opts.me || {}).color);
     this.input = new Input(this.surface, (a, d) => this._action(a, d));
     this.hud = new Hud(this.surface, {
       labels: this.labels,
       touch: this.input.touch,
       onMode: (m) => this.setMode(m),
+      onView: (v) => this.setView(v),
       onFollow: (id) => this.follow(id),
       onStick: (x, y, id) => this.input.setStick(x, y, id),
       onRise: (v) => { this.input.touchRise = v; },
@@ -127,6 +131,7 @@ export class Engine {
     });
     this.hud.setSunTime(this.time);
     this.hud.setMode(this.player.mode, false, false);
+    this.hud.setView(this.view.kind);
     this.hud.showHelp(true);
     this.hud.showKeys(true);
     this.people = new People({
@@ -539,10 +544,17 @@ export class Engine {
     this.hud.setMode(this.player.mode, this.player.ghost, this.light);
   }
 
+  // Through your eyes, or yourself from a little behind (view.js).
+  setView(kind) {
+    this.view.set(kind);
+    this.hud.setView(this.view.kind);
+  }
+
   // ------------------------------------------------------------------ actions
 
   _action(a, d) {
     if (a === "mode") this.setMode(this.player.mode === WALK ? FLY : WALK);
+    else if (a === "view") this.setView(this.view.kind === BEHIND ? EYES : BEHIND);
     else if (a === "sun") this.setTime(TIMES.find((t) => t > this.time + 1e-3) ?? TIMES[0]);
     else if (a === "ghost") {
       this.player.ghost = !this.player.ghost;
@@ -634,14 +646,18 @@ export class Engine {
     this._t += dt;
     const input = this.input.read(dt);
     const p = this.player;
+    const colliders = this._colliders();
     if (input.lookX || input.lookY) p.look(input.lookX, input.lookY);
     if (this._tween) this._stepTween(dt);
     else if (this.ready) {
       // Walking: Shift runs; flying: Shift goes down (input.rise), so it doesn't speed up too.
       const move = p.mode === WALK ? { ...input, jump: input.jump } : { ...input, run: false };
-      p.step(dt, move, this._colliders());
+      p.step(dt, move, colliders);
     }
-    p.eye(this.camera);
+    this.view.frame(this.camera, p, colliders, dt);
+    // The torch shines from you, not from the camera behind you.
+    this.torch.position.z = 0.1 - this.view.back;
+    this.torch.target.position.z = -1 - this.view.back;
 
     // Shadows follow you, snapped to whole texels so they don't shimmer.
     const r = this._shadowR;
@@ -675,6 +691,7 @@ export class Engine {
 
   _tick() {
     const p = this.player;
+    this.view.setColor((this.opts.me || {}).color);
     p.measureAltitude(this._pickables());
     this.hud.telemetry(p);
     const hit = this.input.locked || this.input.touch ? this._ray(null) : null;
@@ -715,7 +732,10 @@ export class Engine {
       rev: this.rev,
       mode: p.mode,
       ghost: p.ghost,
+      view: this.view.kind,
       position: p.position.toArray(),
+      camera: this.camera.position.toArray(),
+      myFigure: this.view.shown,
       yaw: p.yaw,
       pitch: p.pitch,
       onGround: p.onGround,
@@ -738,6 +758,7 @@ export class Engine {
     this._resize.disconnect();
     this.input.dispose();
     this.people.dispose();
+    this.view.dispose();
     for (const t of this.things.values()) t.dispose();
     for (const t of this.replacing.values()) t.dispose();
     this.things.clear();

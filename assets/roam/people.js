@@ -1,6 +1,7 @@
 // The others in the world: the socket that carries where everyone is (cad_roam/presence.py), and
 // their figures: someone walking is a figure in their colour, someone flying is a small drone,
-// each with their name over it. Positions arrive about ten times a second and are eased in.
+// each with their name over it (seen from behind, yours is drawn the same way: view.js).
+// Positions arrive about ten times a second and are eased in.
 
 import * as THREE from "three";
 import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
@@ -12,7 +13,7 @@ function initials(name) {
   return (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => Array.from(w)[0]).join("").toUpperCase() || "?";
 }
 
-function walker(color) {
+export function walker(color) {
   const g = new THREE.Group();
   const cloth = new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.85, 6, 14), cloth);
@@ -29,7 +30,7 @@ function walker(color) {
   return g;
 }
 
-function drone(color) {
+export function drone(color) {
   const g = new THREE.Group();
   const dark = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.4, metalness: 0.5 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.34), dark);

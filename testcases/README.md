@@ -25,6 +25,7 @@ before it starts the server.
 |-------|----------------|
 | `smoke_home` | The models with their real sizes and the one not built yet; a pasted Codoc in CAD link lands in front of that model; a link CAD Roam can't find says so; 繁體中文; a card opens its model; a model that never built and one that doesn't exist each say so. |
 | `walk_fly` | In through the house's door until the back wall stops you; the front wall stops you outside; up the steps onto the platform; a jump; the drone climbs, bumps into the house and, as a ghost (G), flies through its wall; Details shows "10 × 8 m, 3.2 m high" with the size its code says, and Back to the entrance; at the part, a size chosen in Details makes it bigger for everyone; Other models takes you to the tower. |
+| `view` | Through your eyes at first (the camera at your eyes, your figure not drawn); V puts the camera 4 m behind and a little above you, your figure drawn in your colour (counted in the drawn pixels), the torch still where you are, and the camera follows as you walk; inside the house, turned to its door, its back wall keeps the camera inside, and with your back against the wall your figure isn't drawn; the drone is seen from 2 m behind, its camera stopped by a wall unless it is a ghost; V again is your eyes; the Behind and Eyes buttons, the choice kept over a reload; the buttons in 繁體中文. |
 | `together` | Two people at the house see each other (figure, chip, name); one takes off and the other sees where; a click on the chip flies there; a closed tab is seen leaving; someone at the tower is not seen. |
 | `live_update` | The house rebuilt in its collection (as Codoc in CAD does on Run) is swapped in while you are there; a model that never built appears the moment it builds, with you in front of it. |
 | `colours` | The chapel is drawn from its GLB (5 colours, 1 of them glass, 1 glowing), with shadows on; at 10:30 no blue light inside; T jumps to 16:30 and 7:30, and in the morning sun the floor and the wall in front of its east window turn blue (counted in the drawn pixels); the ☀ slider dragged to 16:30 takes the blue away, and from under its lamp the lamp is bright in its warm colour, far brighter than the roof round it; the time is kept over a reload; the house, with only an STL, is one colour. |
@@ -36,6 +37,7 @@ before it starts the server.
 ```bash
 poetry run ./run_test_suite.sh smoke_home
 poetry run ./run_test_suite.sh walk_fly
+poetry run ./run_test_suite.sh view
 poetry run ./run_test_suite.sh together
 poetry run ./run_test_suite.sh live_update
 poetry run ./run_test_suite.sh colours

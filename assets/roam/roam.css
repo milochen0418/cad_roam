@@ -49,6 +49,7 @@
   background: rgba(15, 23, 42, 0.62); padding: 7px 12px; border-radius: 8px; white-space: pre;
 }
 .rm-tele:empty { display: none; }
+.rm-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .rm-modes { display: flex; gap: 4px; background: rgba(15, 23, 42, 0.62); padding: 4px; border-radius: 12px; backdrop-filter: blur(8px); }
 .rm-mode-btn {
   border: 0; border-radius: 9px; padding: 7px 14px; background: transparent; color: #cbd5e1;
