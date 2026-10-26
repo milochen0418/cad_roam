@@ -10,19 +10,26 @@
 // 4 x 4 lines through it along that axis meet one: a wall across the cell blocks it all, a column as
 // much as it covers), their colour, the light they give, and the glass in the cell, as the colour
 // it lets through. Coarser grids (each cell 2 x 2 x 2 of the one before) say the same of bigger
-// blocks; along an axis, a block lets through what gets through both its halves, so a thin wall far
-// away still stops the light.
+// blocks: along an axis, a block lets through the lines along it that none of its cells blocks, so a
+// thin wall far away still stops the light, and a row of thin ribs (a pergola) only what one of
+// them covers.
 //
-// The GPU then works out, at the middle of every cell, the light coming from all round, along
-// CONES cones: each goes out until something stops it, the farther the wider (so it reads the
-// coarser grids). On its way it picks up the light of lamps, and the light thrown back by what it
-// meets: the sunlight on it (from a picture of the model and of its glass seen from the sun) and
-// the light the round before found there, on the side facing the cone. Where it gets out it gets
-// the sky (or the ground), through the glass it crossed. What arrives is kept as a colour plus how
-// much more of it comes from each side (spherical harmonics up to order 1), so a surface takes the
-// light of the side it faces. Each round adds a bounce of the light; ROUNDS rounds are worked out a
-// few layers of cells a frame, again when the sun moves, while the last finished round lights the
-// picture.
+// First, once for a grid (the sun doesn't change it), the GPU works out the sky the middle of every
+// cell sees: along SKY_DIRS directions over the sky, through the glass on the way. Then the light
+// coming to it from all round, along CONES cones: each goes out until something stops it, the
+// farther the wider (so it reads the coarser grids). On its way it picks up the light of lamps, and
+// the light thrown back by what it meets: the sunlight on it (from a picture of the model and of its
+// glass seen from the sun) and the light the round before found there, on the side facing the
+// cone. Where it gets out under the model it gets the ground's light; the sky's comes from the sky
+// it sees. What stops the light is read a block at a time, blended with the blocks beside it, in
+// blocks never so big that they reach back over the cell the light comes to: the grids' blocks
+// don't move with it, and a coarse block round one of its steps could hold the wall or the floor
+// right beside that cell and stop the light coming from the other side (a cell beside a wall or
+// over a floor lost about half its light that way, and a wall in the shade, a courtyard or a street
+// was lit as at night). What arrives is kept as a colour plus how much more of it comes from each
+// side (spherical harmonics up to order 1), so a surface takes the light of the side it faces. Each
+// round adds a bounce of the light; ROUNDS rounds are worked out a few layers of cells a frame,
+// again when the sun moves, while the last finished round lights the picture.
 //
 // A surface takes the light of the cells round a point a little in front of it (so a wall is lit
 // from its own side), leaving out cells inside something solid or with a wall across them (they
@@ -36,13 +43,16 @@ import * as THREE from "three";
 // At most this many cells (bigger ones for a bigger model), none smaller than CELL_MIN metres.
 const CELLS = 1000000;
 // About how much more memory the browser takes for a big model's light (all CELLS of it), while it
-// is worked out (the Sagrada Família: 1.1 GB at its peak without it, 1.43 GB with it, on an M4 Mac).
-export const LIGHT_BYTES = 350e6;
+// is worked out (the Sagrada Família: 1.1 GB at its peak without it, 1.43 GB with it, on an M4 Mac;
+// the sky its cells see adds about 40 MB).
+export const LIGHT_BYTES = 390e6;
 const CELL_MIN = 0.35;
 // A model smaller than this (its longest side, metres) has no inside to light.
 const MODEL_MIN = 3;
-// The light a glowing part gives, against how bright it looks.
-const LAMP_LIGHT = 3;
+// The light a glowing part gives, against how bright it looks (1: as bright as it looks, all of its
+// light; a little more, so that lamps still light a dark inside, while by day the daylight is most of
+// the light, as it is).
+const LAMP_LIGHT = 1.5;
 // How strongly a cell holds back the light crossing it along an axis is kept as a byte: what gets
 // through is exp(-DEPTH * byte / 255), nothing at 255. Kept that way, not as what gets through, so
 // that a wall blended between two grids (a cone reading a grid and the coarser one) still stops
@@ -57,11 +67,10 @@ const BITS = Uint8Array.from({ length: 65536 }, (_, m) => {
   return k;
 });
 // The cones the light is gathered along (all round a cell), how wide they are (the tangent of half
-// their angle), how far apart their samples are (in their widths there), and at most how many.
+// their angle), and at most how many steps each goes (a block of what stops the light a step).
 const CONES = 16;
 const CONE_TAN = 0.6;
-const STEP = 0.7;
-const STEPS = 20;
+const STEPS = 40;
 // The coarsest grid the cones read: each of its cells is 2^MAX_LOD cells of the finest across. A
 // grid is a whole number of those across, so every coarser grid lines up with the finest one.
 const MAX_LOD = 4;
@@ -69,6 +78,11 @@ const ALIGN = 2 ** MAX_LOD;
 // Rounds of light thrown back; cells worked out per frame.
 const ROUNDS = 4;
 const PER_FRAME = 60000;
+// The sky each cell sees, worked out once for a grid (the sun doesn't change it): along this many
+// directions over the sky, each about this wide (the tangent of half its angle); cells per frame.
+const SKY_DIRS = 64;
+const SKY_TAN = 0.18;
+const SKY_PER_FRAME = 45000;
 // The model and its glass seen from the sun, for the sunlight in the cells.
 const SUN_MAP = 2048;
 const GLASS_MAP = 1024;
@@ -99,6 +113,17 @@ function coneDirections(n) {
   const turn = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < n; i++) {
     const y = 1 - (2 * i + 1) / n, r = Math.sqrt(1 - y * y);
+    out.push(new THREE.Vector3(Math.cos(i * turn) * r, y, Math.sin(i * turn) * r));
+  }
+  return out;
+}
+
+// Directions spread evenly over the sky (the upper half of the sphere), as coneDirections.
+function skyDirections(n) {
+  const out = [];
+  const turn = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i + 0.5) / n, r = Math.sqrt(1 - y * y);
     out.push(new THREE.Vector3(Math.cos(i * turn) * r, y, Math.sin(i * turn) * r));
   }
   return out;
@@ -309,7 +334,7 @@ async function voxelize(items, grid, alive) {
       given[a + 2] = half(light[a + 2] * k);
     }
   }
-  return { pass, matter, given };
+  return { pass, matter, given, blocks };
 }
 
 // The mip levels three.js gives a 3D texture of these sizes (and the GPU generates).
@@ -318,46 +343,67 @@ function levelsOf(nx, ny) {
 }
 
 // Coarser grids of how strongly crossing a cell along `axis` holds the light back: each cell is
-// 2 x 2 x 2 of the grid before, letting through, at each place across the axis, what gets through
-// both of its halves along it, on average across.
-function passLevels(base, nx, ny, nz, axis, levels) {
+// 2 x 2 x 2 of the grid before. Its solid parts let through the lines along the axis (4 x 4 for
+// each finest cell across it) that none of the finest cells along it blocks: ribs one behind the
+// other stop only what one of them covers (not as much again for each), a wall stops all of it.
+// Its glass colours what gets through as both its halves' glass does, on average across.
+// `masks`: the lines along the axis each finest cell blocks (16 bits each, see voxelize).
+function passLevels(base, masks, nx, ny, nz, axis, levels) {
   const out = [];
+  const o1 = (axis + 1) % 3, o2 = (axis + 2) % 3;
+  const dims = [nx, ny, nz], n1 = dims[o1], n2 = dims[o2], fine = [1, nx, nx * ny];
+  // The lines through each block of the level along the axis, blocked in any of its cells: as
+  // many as the finest cells across the axis, and the level's blocks along it (the fastest).
+  let along = dims[axis];
+  let lines = new Uint16Array(masks.length);
+  for (let j = 0, q = 0; j < n2; j++) {
+    for (let i = 0; i < n1; i++) {
+      for (let a = 0; a < along; a++, q++) lines[q] = masks[a * fine[axis] + i * fine[o1] + j * fine[o2]];
+    }
+  }
+  // What a cell's glass lets through of colour k (what gets through over what its solid parts let).
+  const glass = (src, f, k) => {
+    const solid = THROUGH[src[f + 3]];
+    return solid > 1e-3 ? Math.min(1, THROUGH[src[f + k]] / solid) : 1;
+  };
   let w = nx, h = ny, d = nz, src = base;
   for (let l = 1; l < levels; l++) {
-    const W = Math.max(1, w >> 1), H = Math.max(1, h >> 1), D = Math.max(1, d >> 1);
+    const half = along >> 1;
+    const merged = new Uint16Array(half * n1 * n2);
+    for (let k = 0, q = 0; k < n1 * n2; k++) {
+      const row = k * along;
+      for (let a = 0; a < half; a++, q++) merged[q] = lines[row + 2 * a] | lines[row + 2 * a + 1];
+    }
+    lines = merged;
+    along = half;
+    const B = 1 << l, W = Math.max(1, w >> 1), H = Math.max(1, h >> 1), D = Math.max(1, d >> 1);
     const dst = new Uint8Array(W * H * D * 4);
-    const size = [w, h, d], stride = [1, w, w * h];
-    const o1 = (axis + 1) % 3, o2 = (axis + 2) % 3;
+    const stride = [1, w, w * h];
     for (let z = 0; z < D; z++) {
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
-          const at = [2 * x, 2 * y, 2 * z];
-          let r = 0, g = 0, b = 0, a = 0, count = 0;
+          const at = [2 * x, 2 * y, 2 * z], c = [x, y, z];
+          let r = 0, g = 0, b = 0;
           for (let i = 0; i < 2; i++) {
             for (let j = 0; j < 2; j++) {
-              const p1 = at[o1] + i, p2 = at[o2] + j;
-              if (p1 >= size[o1] || p2 >= size[o2]) continue;
-              const f = (at[axis] * stride[axis] + p1 * stride[o1] + p2 * stride[o2]) * 4;
-              let fr = THROUGH[src[f]], fg = THROUGH[src[f + 1]], fb = THROUGH[src[f + 2]], fa = THROUGH[src[f + 3]];
-              if (at[axis] + 1 < size[axis]) {
-                const s = f + stride[axis] * 4;
-                fr *= THROUGH[src[s]];
-                fg *= THROUGH[src[s + 1]];
-                fb *= THROUGH[src[s + 2]];
-                fa *= THROUGH[src[s + 3]];
-              }
-              r += fr;
-              g += fg;
-              b += fb;
-              a += fa;
-              count++;
+              const f = (at[axis] * stride[axis] + (at[o1] + i) * stride[o1] + (at[o2] + j) * stride[o2]) * 4;
+              const s = f + stride[axis] * 4;
+              r += glass(src, f, 0) * glass(src, s, 0);
+              g += glass(src, f, 1) * glass(src, s, 1);
+              b += glass(src, f, 2) * glass(src, s, 2);
             }
           }
+          let blocked = 0;
+          const i0 = c[o1] * B, j0 = c[o2] * B;
+          for (let j = j0; j < j0 + B; j++) {
+            for (let i = i0; i < i0 + B; i++) blocked += BITS[lines[c[axis] + along * (i + n1 * j)]];
+          }
+          const open = 1 - blocked / (16 * B * B);
           const o = (x + W * (y + H * z)) * 4;
-          dst[o] = holds(r / count);
-          dst[o + 1] = holds(g / count);
-          dst[o + 2] = holds(b / count);
-          dst[o + 3] = holds(a / count);
+          dst[o] = holds((open * r) / 4);
+          dst[o + 1] = holds((open * g) / 4);
+          dst[o + 2] = holds((open * b) / 4);
+          dst[o + 3] = holds(open);
         }
       }
     }
@@ -452,6 +498,62 @@ void main() {
 	outSun = vec4( sunLight * sum / 8.0, 1.0 );
 }`;
 
+// The sky the middle of each cell of a layer sees, through the glass on the way, as the irradiance
+// the sky's light gives it per unit of it (as the gather keeps its light, a colour plus how much more
+// comes from each side). Along DIRS directions, through blended blocks kept clear of the cell (as in
+// the gather).
+const SKY_FRAGMENT = /* glsl */ `
+#define DIRS ${SKY_DIRS}
+#define STEPS ${STEPS}
+#define DEPTH ${DEPTH.toFixed(1)}
+uniform highp sampler3D passX;
+uniform highp sampler3D passY;
+uniform highp sampler3D passZ;
+uniform vec3 boxMin;
+uniform vec3 boxSize;
+uniform vec3 dims;
+uniform float layer;
+uniform float cell;
+uniform float maxLod;
+uniform vec3 dirs[ DIRS ];
+uniform float skyTan;
+layout( location = 0 ) out vec4 outR;
+layout( location = 1 ) out vec4 outG;
+layout( location = 2 ) out vec4 outB;
+
+void main() {
+	vec3 p = boxMin + vec3( gl_FragCoord.xy, layer + 0.5 ) / dims * boxSize;
+	vec4 sumR = vec4( 0.0 ), sumG = vec4( 0.0 ), sumB = vec4( 0.0 );
+	for ( int k = 0; k < DIRS; k ++ ) {
+		vec3 d = dirs[ k ], ad = abs( d );
+		float away = 1.0;
+		for ( int i = 0; i < 3; i ++ ) if ( ad[ i ] >= 0.5 ) away = min( away, ad[ i ] );
+		vec3 tau = vec3( 1.0 );
+		float t = cell;
+		for ( int s = 0; s < STEPS; s ++ ) {
+			vec3 u = ( p + d * t - boxMin ) / boxSize;
+			if ( any( lessThan( u, vec3( 0.0 ) ) ) || any( greaterThan( u, vec3( 1.0 ) ) ) ) break;
+			float lod = min( log2( max( skyTan * t, cell ) / cell ), maxLod );
+			float block = min( floor( log2( max( ( t / cell * away - 0.5 ) / 1.5, 1.0 ) ) ), floor( lod ) );
+			tau *= exp( - ( textureLod( passX, u, block ).rgb * ad.x + textureLod( passY, u, block ).rgb * ad.y + textureLod( passZ, u, block ).rgb * ad.z ) * DEPTH );
+			if ( tau.r + tau.g + tau.b < 0.03 ) {
+				tau = vec3( 0.0 );
+				break;
+			}
+			t += cell * exp2( block );
+		}
+		vec4 basis = vec4( 1.0, 2.0 * d );
+		sumR += tau.r * basis;
+		sumG += tau.g * basis;
+		sumB += tau.b * basis;
+	}
+	// Each direction stands for an equal part of the sky, as much as the cones' part of all round.
+	float k = 3.14159265 / float( 2 * DIRS );
+	outR = sumR * k;
+	outG = sumG * k;
+	outB = sumB * k;
+}`;
+
 // The light arriving at the middle of each cell of a layer, along the cones (see the top), as
 // irradiance: e0 + dot( e1, n ) for each colour on a face turned to n, times the cell's
 // trustworthiness (how much of the cones' first stretch is open, and of the cell itself: low
@@ -459,7 +561,6 @@ void main() {
 const GATHER_FRAGMENT = /* glsl */ `
 #define CONES ${CONES}
 #define STEPS ${STEPS}
-#define STEP ${STEP.toFixed(2)}
 #define INV_PI 0.3183099
 #define DEPTH ${DEPTH.toFixed(1)}
 uniform highp sampler3D passX;
@@ -472,6 +573,9 @@ uniform highp sampler3D lastR;
 uniform highp sampler3D lastG;
 uniform highp sampler3D lastB;
 uniform highp sampler3D lastV;
+uniform highp sampler3D skyR;
+uniform highp sampler3D skyG;
+uniform highp sampler3D skyB;
 uniform float hasLast;
 uniform vec3 boxMin;
 uniform vec3 boxSize;
@@ -512,14 +616,19 @@ void main() {
 	vec4 sumR = vec4( 0.0 ), sumG = vec4( 0.0 ), sumB = vec4( 0.0 );
 	float near = 0.0;
 	for ( int k = 0; k < CONES; k ++ ) {
-		// How many of a cell's widths along each axis a step goes.
-		vec3 d = cones[ k ], w = STEP * abs( d );
+		vec3 d = cones[ k ], ad = abs( d );
+		// How fast the cone gets away from the cell along the axes it goes along most, at least.
+		float away = 1.0;
+		for ( int i = 0; i < 3; i ++ ) if ( ad[ i ] >= 0.5 ) away = min( away, ad[ i ] );
 		vec3 light = vec3( 0.0 ), tau = vec3( 1.0 ), last = p;
 		float t = cell, first = 1.0;
 		bool open = true;
 		for ( int s = 0; s < STEPS; s ++ ) {
-			float size = max( 2.0 * coneTan * t, cell );
-			float lod = min( log2( size / cell ), maxLod );
+			// The cone's width here: the grid it reads the light of what it meets in.
+			float lod = min( log2( max( 2.0 * coneTan * t, cell ) / cell ), maxLod );
+			// What stops it, in blended blocks no wider: one takes in what is up to a block and a
+			// half round where it is read, so they are kept narrow enough to stay clear of this cell.
+			float block = min( floor( log2( max( ( t / cell * away - 0.5 ) / 1.5, 1.0 ) ) ), floor( lod ) );
 			vec3 q = p + d * t;
 			if ( q.y < groundY && last.y >= groundY ) {
 				// The ground, as bright as the light on it here against the open ground's (inside,
@@ -535,9 +644,9 @@ void main() {
 				open = q.y >= groundY;
 				break;
 			}
-			// How strongly the step's way holds the light back: crossing a cell along an axis as the
+			// How strongly the step's way holds the light back: crossing a block along an axis as the
 			// grid says; a cone going slantwise crosses a wall over a longer way, as much in all.
-			vec4 held = ( textureLod( passX, u, lod ) * w.x + textureLod( passY, u, lod ) * w.y + textureLod( passZ, u, lod ) * w.z ) * DEPTH;
+			vec4 held = ( textureLod( passX, u, block ) * ad.x + textureLod( passY, u, block ) * ad.y + textureLod( passZ, u, block ) * ad.z ) * DEPTH;
 			vec3 through = exp( - held.rgb );
 			float a = 1.0 - exp( - held.a );
 			if ( a > 0.002 ) {
@@ -545,8 +654,8 @@ void main() {
 				light += tau * a * ( m.rgb / max( m.a, 0.004 ) ) * lightOn( ( last - boxMin ) / boxSize, - d, lod ) * INV_PI;
 			}
 			// The light given in the cells the step crosses (the coarser grids average it over their
-			// blocks; the step is as deep as STEP blocks).
-			light += tau * textureLod( given, u, lod ).rgb * ( STEP * exp2( lod ) );
+			// blocks; the step is a block deep), as clear of this cell as what stops the light.
+			light += tau * textureLod( given, u, block ).rgb * exp2( block );
 			tau *= through;
 			if ( s == 0 ) first = ( tau.r + tau.g + tau.b ) / 3.0;
 			if ( tau.r + tau.g + tau.b < 0.03 ) {
@@ -554,10 +663,11 @@ void main() {
 				break;
 			}
 			last = q;
-			// A step at most as long as the coarsest grid's cells, so it skips none of them.
-			t += min( size, cell * exp2( maxLod ) ) * STEP;
+			// A block on: blended, the blocks overlap, and none of the way is skipped.
+			t += cell * exp2( block );
 		}
-		if ( open ) light += tau * ( d.y >= 0.0 ? skyLight : groundLight );
+		// Out under the sky: the sky map has its light (below). Out under the model: the ground's.
+		if ( open && d.y < 0.0 ) light += tau * groundLight;
 		near += first;
 		vec4 basis = vec4( 1.0, 2.0 * d );
 		sumR += light.r * basis;
@@ -567,10 +677,11 @@ void main() {
 	// A cell with a wall across it has the light of both its sides: not for the surfaces round it.
 	float own = textureLod( matter, ( p - boxMin ) / boxSize, 0.0 ).a;
 	float v = clamp( ( near / float( CONES ) - 0.15 ) / 0.5, 0.0, 1.0 ) * ( 1.0 - own );
-	float k = 3.14159265 / float( CONES ) * v;
-	outR = sumR * k;
-	outG = sumG * k;
-	outB = sumB * k;
+	float k = 3.14159265 / float( CONES );
+	vec3 at = ( p - boxMin ) / boxSize;
+	outR = ( sumR * k + textureLod( skyR, at, 0.0 ) * skyLight.r ) * v;
+	outG = ( sumG * k + textureLod( skyG, at, 0.0 ) * skyLight.g ) * v;
+	outB = ( sumB * k + textureLod( skyB, at, 0.0 ) * skyLight.b ) * v;
 	outV = vec4( v, 0.0, 0.0, 1.0 );
 }`;
 
@@ -663,11 +774,9 @@ class Grid {
     // The coarser grids the cones read (the GPU's have more, unused).
     this.levels = Math.min(levelsOf(nx, ny), MAX_LOD + 1);
     this.pass = data.pass.map((d, axis) => {
+      // Read blended with the cells beside them, a block at a time (see the gather): a thin wall
+      // still stops all the light crossing it.
       const t = volume(d, nx, ny, nz);
-      // Read cell by cell (not blended with the cell beside it): a thin wall stays a wall, and
-      // thin columns don't swell into their neighbours.
-      t.magFilter = THREE.NearestFilter;
-      t.minFilter = THREE.NearestMipmapLinearFilter;
       renderer.initTexture(t);
       // The GPU's coarser grids average; along its axis, a block lets through what gets through
       // both halves (see passLevels).
@@ -676,7 +785,7 @@ class Grid {
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-      passLevels(d, nx, ny, nz, axis, this.levels).forEach((m, i) => {
+      passLevels(d, data.blocks[axis], nx, ny, nz, axis, this.levels).forEach((m, i) => {
         gl.texSubImage3D(gl.TEXTURE_3D, i + 1, 0, 0, 0, m.w, m.h, m.d, gl.RGBA, gl.UNSIGNED_BYTE, m.data);
       });
       renderer.state.unbindTexture();
@@ -692,6 +801,9 @@ class Grid {
     }
     this.sun = volumeTarget(nx, ny, nz, 1);
     this.sets = [volumeTarget(nx, ny, nz, 4), volumeTarget(nx, ny, nz, 4)];
+    this.sky = volumeTarget(nx, ny, nz, 3); // the sky each cell sees (once)
+    this.skyLayer = 0;
+    this.skyDone = false;
     this.shown = -1; // the set of the last finished round
     this.rounds = 0; // rounds since the light last changed
     this.layer = 0;
@@ -701,7 +813,7 @@ class Grid {
 
   dispose() {
     for (const t of [...this.pass, this.matter, this.given]) if (t) t.dispose();
-    for (const rt of [this.sun, ...this.sets]) rt.dispose();
+    for (const rt of [this.sun, this.sky, ...this.sets]) rt.dispose();
   }
 }
 
@@ -737,6 +849,7 @@ export class Light {
       roamGridOn: { value: 0 },
     };
     this.cones = coneDirections(CONES);
+    this.skyDirs = skyDirections(SKY_DIRS);
     this.none = new THREE.Data3DTexture(new Uint8Array(4), 1, 1, 1);
     this.none.needsUpdate = true;
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
@@ -784,6 +897,9 @@ export class Light {
         lastG: { value: null },
         lastB: { value: null },
         lastV: { value: null },
+        skyR: { value: null },
+        skyG: { value: null },
+        skyB: { value: null },
         hasLast: { value: 0 },
         boxMin: { value: new THREE.Vector3() },
         boxSize: { value: new THREE.Vector3() },
@@ -798,6 +914,26 @@ export class Light {
         groundLight: { value: new THREE.Color() },
         groundY: { value: 0 },
         groundOpen: { value: 1 },
+      },
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.skyMaterial = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: QUAD_VERTEX,
+      fragmentShader: SKY_FRAGMENT,
+      uniforms: {
+        passX: { value: null },
+        passY: { value: null },
+        passZ: { value: null },
+        boxMin: { value: new THREE.Vector3() },
+        boxSize: { value: new THREE.Vector3() },
+        dims: { value: new THREE.Vector3() },
+        layer: { value: 0 },
+        cell: { value: 1 },
+        maxLod: { value: 0 },
+        dirs: { value: this.skyDirs },
+        skyTan: { value: SKY_TAN },
       },
       depthTest: false,
       depthWrite: false,
@@ -956,6 +1092,11 @@ export class Light {
       grid.rounds = 0;
       grid.layer = 0;
     }
+    // The sky each cell sees first (once for a grid): the rounds take it in.
+    if (!grid.skyDone) {
+      this._skyLight(grid, now);
+      if (!grid.skyDone) return;
+    }
     if (grid.rounds >= ROUNDS) return;
     const { nx, ny, nz } = grid.spec;
     const write = grid.shown < 0 ? 0 : 1 - grid.shown;
@@ -972,6 +1113,9 @@ export class Light {
     u.lastB.value = last ? last[2] : this.none;
     u.lastV.value = last ? last[3] : this.none;
     u.hasLast.value = last ? 1 : 0;
+    u.skyR.value = grid.sky.textures[0];
+    u.skyG.value = grid.sky.textures[1];
+    u.skyB.value = grid.sky.textures[2];
     u.boxMin.value.copy(grid.box.min);
     grid.box.getSize(u.boxSize.value);
     u.dims.value.set(nx, ny, nz);
@@ -1002,6 +1146,33 @@ export class Light {
       grid.shown = write;
       grid.rounds++;
       grid.layer = 0;
+    }
+  }
+
+  // The sky each of the grid's cells sees, a few layers a frame (all of them: `all`).
+  _skyLight(grid, all) {
+    const { nx, ny, nz } = grid.spec;
+    const m = this.skyMaterial, u = m.uniforms;
+    u.passX.value = grid.pass[0];
+    u.passY.value = grid.pass[1];
+    u.passZ.value = grid.pass[2];
+    u.boxMin.value.copy(grid.box.min);
+    grid.box.getSize(u.boxSize.value);
+    u.dims.value.set(nx, ny, nz);
+    u.cell.value = grid.spec.cell;
+    u.maxLod.value = grid.levels - 1;
+    const layers = all ? nz : Math.max(1, Math.floor(SKY_PER_FRAME / (nx * ny)));
+    this._into(() => {
+      this.quad.material = m;
+      for (let i = 0; i < layers && grid.skyLayer < nz; i++, grid.skyLayer++) {
+        u.layer.value = grid.skyLayer;
+        this.renderer.setRenderTarget(grid.sky, grid.skyLayer);
+        this.renderer.render(this.quadScene, this.quadCamera);
+      }
+    });
+    if (grid.skyLayer >= nz) {
+      for (const t of grid.sky.textures) mipmap(this.renderer, t);
+      grid.skyDone = true;
     }
   }
 
@@ -1217,6 +1388,6 @@ export class Light {
     if (this.sampleTarget) this.sampleTarget.dispose();
     this.none.dispose();
     this.quad.geometry.dispose();
-    for (const m of [this.sunMaterial, this.gatherMaterial, this.eyeMaterial, this.sampleMaterial]) if (m) m.dispose();
+    for (const m of [this.sunMaterial, this.skyMaterial, this.gatherMaterial, this.eyeMaterial, this.sampleMaterial]) if (m) m.dispose();
   }
 }

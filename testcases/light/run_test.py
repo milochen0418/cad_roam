@@ -2,10 +2,13 @@
 blue window in the east wall, its warm lamp 4 m up in the middle) the light is worked out, and then
 its lamp lights what is round it (beside it, a face turned to it gets many times the light of one
 turned away, in the lamp's warm colour; the same under it, looking up); in the morning, the sun
-through the blue window fills the chapel with blue light, in the evening (the sun in the west) not;
+through the blue window makes the light in the chapel far bluer than in the evening (the sun in the
+west), from the patch of blue sunlight it throws back;
 inside, the view is brighter than outside, as eyes get used to the dark, and outside it is as it
-was. The house, an STL (one colour, no glass, no lamps), gets its light through its door: its floor
-inside is darker than its roof under the sky. Fast (no shadows) works out no light."""
+was. Outside, the chapel's back wall, in its shade, gets about the light a wall gets in the open,
+not the dark of a night (so does the house's roof, of a roof). The house, an STL (one colour, no
+glass, no lamps), gets its light through its door: its floor inside is darker than its roof under
+the sky. Fast (no shadows) works out no light."""
 
 from __future__ import annotations
 
@@ -19,11 +22,25 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 from common import launch, light_at, log, model_place, new_page, open_model, settle, shot, state, wait_for, wait_light  # noqa: E402
 
 CHAPEL, HOUSE = "cad/chapel", "cad/house"
-UP, DOWN, EAST, WEST, ALL = (0, 0, 1), (0, 0, -1), (1, 0, 0), (-1, 0, 0), (0, 0, 0)
+UP, DOWN, EAST, WEST, NORTH, ALL = (0, 0, 1), (0, 0, -1), (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, 0, 0)
 
 
 def lum(rgb) -> float:
     return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+
+def in_the_open(page, side: str) -> float:
+    """How much light a wall ("wall") or a roof ("roof") gets out in the open, as the sky lights it
+    away from a model: the sky's light from above, the ground's from below, the light everywhere."""
+    return page.evaluate(
+        """(side) => {
+          const e = window.__roam, s = e.skyLight, f = e.fillLight;
+          const c = side === "wall" ? s.color.clone().add(s.groundColor).multiplyScalar(0.5) : s.color.clone();
+          c.multiplyScalar(s.intensity).add(f.color.clone().multiplyScalar(f.intensity));
+          return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+        }""",
+        side,
+    )
 
 
 def at_time(page, hours: float) -> dict:
@@ -42,6 +59,13 @@ def main() -> int:
         light = wait_light(page)
         log("chapel's light:", light)
         assert light["cells"] and light["cell"] >= 0.35, light
+
+        # Outside, the chapel's back wall (to the north) is in its shade, lit by the sky: about as
+        # much as a wall out in the open (the cones going away from it used to be stopped by the
+        # wall itself, and a wall in the shade was as dark as at night).
+        wall, open_wall = light_at(page, CHAPEL, 0.0, 6.0, 2.5, NORTH), in_the_open(page, "wall")
+        log("the back wall, in the shade:", wall, "a wall in the open:", round(open_wall, 3))
+        assert wall["sure"] > 0.05 and lum(wall["light"]) > 0.85 * open_wall, (wall, open_wall)
 
         # The lamp lights what is round it: beside it (the lamp is 0.6 m wide, 4 to 4.3 m up), a face
         # turned to it gets many times the light of one turned away, in its warm colour; the same
@@ -62,15 +86,15 @@ def main() -> int:
         shot(page, "01-lamp")
 
         # The evening sun is behind the chapel: no blue light in it; the morning sun comes in
-        # through its blue window and fills it with blue light.
+        # through its blue window, and the patch it lights throws blue light all round.
         evening = light_at(page, CHAPEL, 0.0, 0.0, 1.6, ALL)
         light = at_time(page, 7.5)
         morning = light_at(page, CHAPEL, 0.0, 0.0, 1.6, ALL)
         log("in the middle of the chapel, evening:", evening, "morning:", morning)
-        r, g, b = morning["light"]
-        assert b > 1.15 * r and b > g, morning
         r, g, b = evening["light"]
         assert b < 0.8 * r, evening
+        mr, mg, mb = morning["light"]
+        assert mb > 1.5 * b and mb / mr > 1.5 * b / r, (morning, evening)
         model_place(page, CHAPEL, -2.0, 1.0, 0.0, -1.2, -0.2)
         settle(page, 1.0)
         shot(page, "02-morning")
@@ -90,8 +114,10 @@ def main() -> int:
         log("house's light:", light)
         floor = light_at(page, HOUSE, -3.0, 2.0, 0.06, UP)
         roof = light_at(page, HOUSE, 0.0, 0.0, 3.21, UP)
-        log("house's floor:", floor, "its roof:", roof)
+        open_roof = in_the_open(page, "roof")
+        log("house's floor:", floor, "its roof:", roof, "a roof in the open:", round(open_roof, 3))
         assert lum(floor["light"]) < 0.5 * lum(roof["light"]), (floor, roof)
+        assert lum(roof["light"]) > 0.85 * open_roof, (roof, open_roof)
 
         # Fast: no light worked out.
         fast = new_page(browser, errors, "B", quality="low")
