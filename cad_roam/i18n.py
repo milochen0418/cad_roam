@@ -58,6 +58,8 @@ TEXTS: dict[str, dict[str, str]] = {
         # Calls
         "call_everyone": "Call everyone",
         "call_everyone_title": "Ring everyone at this model",
+        "ai": "AI",
+        "ai_title": "Talk with the AI about what you see (Alt+A)",
         "join_call": "Join call",
         "join_call_title": "Join the call at this model",
         "incoming_call": "Incoming call",
@@ -158,6 +160,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "graphics_low": "最快（沒有影子）",
         "call_everyone": "Call everyone",
         "call_everyone_title": "打給在這個模型裡的每個人",
+        "ai": "AI",
+        "ai_title": "跟 AI 聊聊你眼前的東西（Alt+A）",
         "join_call": "加入通話",
         "join_call_title": "加入這個模型的通話",
         "incoming_call": "來電",

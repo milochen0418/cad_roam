@@ -29,9 +29,13 @@ export function RoamWorld({ model, backend, me, spawn, command, labels, quality,
       return undefined;
     }
     engine.current = eng;
+    // What the page shows, for an AI in a dialog over it (reflex_ddns_auth.companion).
+    const describe = () => eng.describe();
+    window.__ddnsContext = describe;
     return () => {
       eng.dispose();
       if (engine.current === eng) engine.current = null;
+      if (window.__ddnsContext === describe) delete window.__ddnsContext;
     };
     // Another model or another tab identity makes a new engine; the rest is passed in below.
   }, [model, peer, backend, quality]);

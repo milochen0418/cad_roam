@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import reflex as rx
 
-from cad_roam.components.together import TOP_BTN, call_button, identity, incoming_call, lang_toggle, page_hooks, share_button
+from cad_roam.components.together import TOP_BTN, ai_talk_button, call_button, identity, incoming_call, lang_toggle, page_hooks, share_button
 from cad_roam.components.world_view import world_view
 from cad_roam.states.lang import LangState
 from cad_roam.states.model import Link, ModelState, Row
@@ -62,6 +62,7 @@ def top_bar() -> rx.Component:
         rx.el.div(
             share_button(),
             call_button(),
+            ai_talk_button(),
             rx.el.select(
                 rx.el.option(T["graphics_high"], value="high"),
                 rx.el.option(T["graphics_low"], value="low"),

@@ -111,6 +111,11 @@ class ModelState(rx.State):
     quality: str = rx.LocalStorage("high", name="cad_roam_quality", sync=True)
 
     @rx.var
+    def room_id(self) -> str:
+        """The model's id as in /room/<id> (what the AI's tools call its room)."""
+        return self.model.split("/", 1)[1] if "/" in self.model else ""
+
+    @rx.var
     def shown_rows(self) -> list[Row]:
         q = self.query.strip().lower()
         return [r for r in self.rows if q in r.title.lower()] if q else self.rows

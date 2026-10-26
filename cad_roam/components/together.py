@@ -11,6 +11,11 @@ from cad_roam.states.lang import LangState
 from cad_roam.states.room import ModelRoom
 from cad_roam.states.model import AuthState, Intent, ModelState
 
+try:
+    from reflex_ddns_auth.companion import ai_button
+except ImportError:  # a DDNS library without the talking AI
+    ai_button = None
+
 T = LangState.t
 
 TOP_BTN = "flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[13px] font-medium text-slate-200 hover:bg-white/10 whitespace-nowrap shrink-0"
@@ -74,6 +79,22 @@ def lang_toggle(then: list | None = None) -> rx.Component:
         id="lang-toggle",
         title=T["language"],
         class_name="px-2 py-1 rounded-md text-xs font-medium text-slate-300 hover:bg-white/10 whitespace-nowrap shrink-0",
+    )
+
+
+def ai_talk_button() -> rx.Component:
+    """The AI Hub's talking AI, over the page, knowing where you are and what you see (the 3D view
+    tells it: engine.js describe)."""
+    if ai_button is None:
+        return rx.fragment()
+    return ai_button(
+        room=ModelState.room_id,
+        lang=LangState.lang,
+        label="AI",
+        title=T["ai_title"],
+        floating=False,
+        class_name=TOP_BTN,
+        children=(rx.icon("bot", class_name="h-4 w-4"), rx.el.span(T["ai"], class_name="hidden lg:inline whitespace-nowrap")),
     )
 
 

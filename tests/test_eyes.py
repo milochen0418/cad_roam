@@ -215,8 +215,9 @@ def test_the_tools_are_offered(monkeypatch):
     app = type("App", (), {"_api": Starlette()})()
     ai_tools.register(app)
     manifest = {t["name"]: t for t in ddns_tools.manifest()["tools"]}
-    assert set(manifest) == {"roam.view", "roam.tour", "roam.where"}
+    assert set(manifest) == {"roam.view", "roam.tour", "roam.where", "roam.guide"}
     assert all(t["kind"] == "read" for t in manifest.values())
+    assert manifest["roam.guide"]["input_schema"]["properties"] == {}
     view = manifest["roam.view"]["input_schema"]
     assert view["required"] == ["room", "at"]
     assert view["properties"]["at"] == {"type": "array", "items": {"type": "number"}, "description": ai_tools.AT}

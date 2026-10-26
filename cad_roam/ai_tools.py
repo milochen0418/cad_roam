@@ -42,6 +42,29 @@ STOPS = (
 STOP_KEYS = ("at", "look_at", "heading", "pitch", "name")
 
 
+GUIDE = """\
+CAD Roam shows one Codoc in CAD model at its real size; people walk in it (their eyes 1.62 m over \
+the floor) or fly round it like a drone, and everyone at the same model sees each other. A room is \
+a model's id, as in https://cad-roam.reflex-ddns.com/room/<id> (the same id as in Codoc in CAD). \
+Places are in the model's own coordinates, as its code has them: its units, Z up, +X east, +Y \
+north, its front towards -Y; headings are compass bearings (0 towards +Y, 90 towards +X); the \
+sun's time runs from 6:30 to 17:30 (10:30 unless someone moved it).
+
+Someone talking to you from CAD Roam says, at the start of each message, where they are and \
+where they look. To see what they see, call roam.view with their room, at, heading and pitch; \
+roam.where lists everyone at a model; roam.tour takes pictures from several places. Pictures are \
+taken by a CAD Roam page open on the model (theirs counts), so they show the latest build in its \
+light: the sun through openings and glass, lamps (parts that glow), the light walls throw back, \
+and eyes used to the dark ("eyes" = how many times brighter the view is drawn, 1 outdoors, up to \
+10). The model itself is edited in Codoc in CAD (cad.set_code, cad.run_preview, when those tools \
+are offered to you); a rebuild shows up in CAD Roam at once."""
+
+
+async def guide(ctx: ToolContext) -> str:
+    """What CAD Roam is and how to talk about it: read this before the other roam tools."""
+    return GUIDE
+
+
 def _who(ctx: ToolContext) -> str:
     """How the AI is named on the page taking its picture (as in Codoc in CAD)."""
     return f"AI · {ctx.user}" if ctx.user else "AI"
@@ -236,3 +259,4 @@ def register(app: rx.App) -> None:
         params={"room": ROOM, "stops": STOPS, "time": TIME, "fov": FOV},
     )(tour)
     tool(app, "roam.where", title="Where people are in a model", params={"room": ROOM})(where)
+    tool(app, "roam.guide", title="How CAD Roam works, for an AI")(guide)

@@ -24,7 +24,7 @@ import { Input } from "./input.js";
 import { LIGHT_BYTES } from "./light.js";
 import { Look } from "./look.js";
 import { People, TORCH } from "./people.js";
-import { FLY, Player, WALK } from "./player.js";
+import { BODY, FLY, Player, WALK } from "./player.js";
 import { BYTES_PER_TRIANGLE, Thing, needsRebuild } from "./things.js";
 import { BEHIND, EYES, View, reach } from "./view.js";
 
@@ -788,6 +788,53 @@ export class Engine {
   }
 
   // For tests and the page: where you are and what is loaded.
+  // What this page shows, in words, for an AI in a dialog over it (reflex_ddns_auth.companion asks
+  // through window.__ddnsContext): the model, where you are in it and where you look, in the model's
+  // own coordinates and bearings (as the roam.view tool takes them), the light, the time, who else
+  // is here. The words are English (the AI answers in the person's language).
+  describe() {
+    const t = [...this.things.values()][0];
+    const p = this.player;
+    const me = this.opts.me || {};
+    const who = me.name || "The person";
+    const r = (v, n = 1) => Math.round(v * 10 ** n) / 10 ** n;
+    const mode = p.mode === FLY ? "flying" : "walking";
+    const room = this.model.split("/").slice(1).join("/");
+    const out = { app: "cad-roam", room, mode, view: this.view.kind, time: clock(this.time), people: this.peopleList.length };
+    if (!t) return { ...out, text: `CAD Roam: ${who} is at a model that has no build to show yet.` };
+    const d = t.data;
+    const toModel = (v) => {
+      const [x0, y0, , x1, y1] = d.box;
+      return [r((v.x - d.x) / d.unit + (x0 + x1) / 2, 2), r(-(v.z - d.z) / d.unit + (y0 + y1) / 2, 2), r((v.y - d.base) / d.unit + d.ground, 2)];
+    };
+    const eye = p.position.clone();
+    if (p.mode === WALK) eye.y += BODY.eye;
+    const at = toModel(eye);
+    const heading = r(((-p.yaw * 180) / Math.PI) % 360 < 0 ? (((-p.yaw * 180) / Math.PI) % 360) + 360 : ((-p.yaw * 180) / Math.PI) % 360);
+    const pitch = r((p.pitch * 180) / Math.PI);
+    const inside = t.bounds.containsPoint(eye);
+    const ahead = this.eyes._ahead(this.camera);
+    const light = this.look.light && this.look.light.brightness ? r(this.look.light.brightness) : 1;
+    const others = this.peopleList
+      .filter((x) => x.id !== me.peer && x.p)
+      .map((x) => {
+        const e = new THREE.Vector3().fromArray(x.p);
+        if (x.mode !== "fly") e.y += BODY.eye;
+        return `${x.name} (${x.mode === "fly" ? "flying" : "walking"}) at [${toModel(e).join(", ")}]`;
+      });
+    const size = `${r(d.w)} × ${r(d.d)} m, ${r(d.h)} m high; 1 unit of its code = ${d.unit} m`;
+    const text =
+      `CAD Roam: ${who} is ${mode} ${inside ? "inside" : "outside"} the model "${d.title}" (${size}), ` +
+      `at [${at.join(", ")}] in the model's own coordinates (x east, y north, z up; these are the eyes), ` +
+      `looking heading ${heading}° (0 = +y north, 90 = +x east), pitch ${pitch}°` +
+      (ahead !== null ? `; the first surface ahead is ${ahead} m away` : "") +
+      `. Sun time ${out.time}; eyes adapted ${light}× (1 = daylight outdoors${light > 3 ? ", so it is dim here" : ""}). ` +
+      (others.length ? `Also here: ${others.join("; ")}. ` : "Nobody else is here. ") +
+      (t.status !== "ready" ? `The model is ${t.status} on this page. ` : "") +
+      `To see what ${who} sees, call roam.view with room="${room}", at=[${at.join(", ")}], heading=${heading}, pitch=${pitch}.`;
+    return { ...out, title: d.title, at, heading, pitch, inside, ahead, light, text };
+  }
+
   state() {
     const p = this.player;
     const things = {}, looks = {};
