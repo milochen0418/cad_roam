@@ -52,6 +52,17 @@ def new_page(browser: Browser, errors: list[str], who: str, *, locale: str = "en
     return page
 
 
+def sign_in(page: Page, email: str, name: str) -> None:
+    """Signs the page's browser in as someone, before it opens a page: the platform's sign-in
+    cookie, made with the server's ``DDNS_AUTH_SECRET`` (a suite's ``server.env``)."""
+    import jwt
+
+    claims = {"email": email, "name": name, "approved": True, "exp": int(time.time()) + 3600}
+    token = jwt.encode(claims, os.environ["DDNS_AUTH_SECRET"], algorithm="HS256")
+    # The page's host, and the backend's (Reflex's socket goes to localhost).
+    page.context.add_cookies([{"name": "ddns_auth", "value": token, "domain": d, "path": "/"} for d in ("127.0.0.1", "localhost")])
+
+
 def shot(page: Page, name: str) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(OUTPUT_DIR / f"{name}.png"))

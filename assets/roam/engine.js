@@ -9,7 +9,8 @@
 //
 // The page (world.jsx) passes commands in ({type: "goto" | "follow" | "mode" | "reload" |
 // "release" | "rejoined", ...}) and hears back through onEvent ({type: "ready" | "select" |
-// "rejoin" | "world" | "gone" | "mode" | "error", ...}). window.__roam is this engine, for tests.
+// "rejoin" | "world" | "gone" | "mode" | "profile" | "error", ...}). window.__roam is this engine,
+// for tests.
 //
 // An AI may ask this page for a picture of the model from inside it (eyes.js); your view stays yours.
 
@@ -18,14 +19,14 @@ import { acceleratedRaycast } from "three-mesh-bvh";
 import { Sky } from "three/addons/objects/Sky.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { Eyes } from "./eyes.js";
-import { Hud } from "./hud.js";
+import { Hud, clock } from "./hud.js";
 import { Input } from "./input.js";
 import { LIGHT_BYTES } from "./light.js";
 import { Look } from "./look.js";
-import { People } from "./people.js";
+import { People, TORCH } from "./people.js";
 import { FLY, Player, WALK } from "./player.js";
 import { BYTES_PER_TRIANGLE, Thing, needsRebuild } from "./things.js";
-import { BEHIND, EYES, View } from "./view.js";
+import { BEHIND, EYES, View, reach } from "./view.js";
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
@@ -38,8 +39,9 @@ const BIG = new Map();
 // Barcelona's: up in the east at 6:00, highest (49°) in the south at noon, down in the west at
 // 18:00 (solar time; +X is the east, -Z the north). Its time is dragged in the HUD, or T jumps to
 // the morning, the day and the evening. 10:30 is the sun CAD Roam always had: behind people
-// arriving (the south) and a little to the east, so fronts are lit. A browser keeps the time it was
-// left at.
+// arriving (the south) and a little to the east, so fronts are lit. The time is the model's, the
+// same for everyone there: anyone moves it for all (people.js). A browser keeps the time it was
+// left at, which it brings when nobody is at the model yet.
 const LATITUDE = THREE.MathUtils.degToRad(41.4);
 const SUN_TIMES = { first: 6.5, last: 17.5 };
 const TIMES = [7.5, 10.5, 16.5];
@@ -129,11 +131,12 @@ export class Engine {
       onMode: (m) => this.setMode(m),
       onView: (v) => this.setView(v),
       onFollow: (id) => this.follow(id),
+      onProfile: (id) => this._emit({ type: "profile", peer: id }),
       onStick: (x, y, id) => this.input.setStick(x, y, id),
       onRise: (v) => { this.input.touchRise = v; },
       onAction: (a, d) => this._action(a, d),
       sunTimes: SUN_TIMES,
-      onSunTime: (t) => this.setTime(t),
+      onSunTime: (t) => this.setTime(t, true),
     });
     this.hud.setSunTime(this.time);
     this.hud.setMode(this.player.mode, false, false);
@@ -146,6 +149,9 @@ export class Engine {
       wsUrl: this.url(`/_roam/ws/${this.path}`).replace(/^http/, "ws"),
       peer: (opts.me || {}).peer,
       quality: this.quality,
+      time: () => this.time,
+      reach: (from, dir, far) => reach(this._colliders(), from, dir, far),
+      onSun: (sun, moved) => this._sunFrom(sun, moved),
       onShoot: (req) => this.eyes.shoot(req),
       onRejoin: () => this._emit({ type: "rejoin" }),
       onWorld: (rev) => { if (rev !== this.rev) this.reload(); },
@@ -249,25 +255,34 @@ export class Engine {
     scene.add(ground);
     this.ground = ground;
 
-    // A torch for dark insides (L).
-    const torch = new THREE.SpotLight(0xfff6e5, 0, 60, Math.PI / 6, 0.45, 1.2);
+    // A torch for dark insides (L); the others see its light too (people.js).
+    const torch = new THREE.SpotLight(TORCH.color, 0, TORCH.distance, TORCH.angle, TORCH.penumbra, TORCH.decay);
     torch.position.set(0, 0, 0.1);
     torch.target.position.set(0, 0, -1);
     this.camera.add(torch, torch.target);
     this.torch = torch;
   }
 
-  // Your time of the day (hours), as the HUD shows it and the browser keeps it.
-  setTime(hours) {
+  // The time of the day (hours) at the model, as the HUD shows it and the browser keeps it: moved
+  // by you (`share`: for everyone there too) or by someone else (_sunFrom).
+  setTime(hours, share = false) {
     const t = THREE.MathUtils.clamp(Math.round((Number(hours) || DAYTIME) * 60) / 60, SUN_TIMES.first, SUN_TIMES.last);
     this.time = t;
-    this.sunTo(t);
+    // While an AI's picture has the sun (eyes.js), it comes back to this time afterwards.
+    if (!this.eyes || this.eyes.time === null) this.sunTo(t);
     if (this.hud) this.hud.setSunTime(t);
+    if (share && this.people) this.people.moveSun(t);
     try {
       localStorage.setItem(SUN_KEY, String(t));
     } catch (e) {
       // A browser that keeps nothing starts at 10:30 again.
     }
+  }
+
+  // The model's sun as the server has it: when you come in, or moved by someone (`moved`: said).
+  _sunFrom(sun, moved) {
+    this.setTime(sun.time);
+    if (moved && sun.name) this.hud.say(this.hud.t("sun_moved", "{name} moved the sun to {time}").replace("{name}", sun.name).replace("{time}", clock(this.time)));
   }
 
   // The sun at a time of the day (hours), yours or an AI picture's (eyes.js): low (under 20°), it is
@@ -614,13 +629,13 @@ export class Engine {
   _action(a, d) {
     if (a === "mode") this.setMode(this.player.mode === WALK ? FLY : WALK);
     else if (a === "view") this.setView(this.view.kind === BEHIND ? EYES : BEHIND);
-    else if (a === "sun") this.setTime(TIMES.find((t) => t > this.time + 1e-3) ?? TIMES[0]);
+    else if (a === "sun") this.setTime(TIMES.find((t) => t > this.time + 1e-3) ?? TIMES[0], true);
     else if (a === "ghost") {
       this.player.ghost = !this.player.ghost;
       this.hud.setMode(this.player.mode, this.player.ghost, this.light);
     } else if (a === "light") {
       this.light = !this.light;
-      this.torch.intensity = this.light ? 60 : 0;
+      this.torch.intensity = this.light ? TORCH.intensity : 0;
       this.hud.setMode(this.player.mode, this.player.ghost, this.light);
     } else if (a === "interact") this._pickAt(null);
     else if (a === "pick") this._pickAt(d);
@@ -722,9 +737,9 @@ export class Engine {
     this.eyes.frame();
     this.shade(p.position, p.mode === FLY ? p.position.y : 0);
 
-    this.people.frame(dt, this._t);
+    this.people.frame(dt, this._t, this.camera.position);
     this.people.send(
-      { p: [p.position.x, p.position.y, p.position.z].map((v) => Math.round(v * 1000) / 1000), yaw: Math.round(p.yaw * 1e4) / 1e4, pitch: Math.round(p.pitch * 1e4) / 1e4, mode: p.mode, moving: p.moving, time: this.time },
+      { p: [p.position.x, p.position.y, p.position.z].map((v) => Math.round(v * 1000) / 1000), yaw: Math.round(p.yaw * 1e4) / 1e4, pitch: Math.round(p.pitch * 1e4) / 1e4, mode: p.mode, moving: p.moving, time: this.time, torch: this.light },
       performance.now(),
     );
 
@@ -800,8 +815,10 @@ export class Engine {
       time: this.time,
       sunTime: this.eyes.time ?? this.time, // the sun's: an AI picture's for a moment after one
       pictures: this.eyes.taken,
-      people: this.peopleList.map((x) => ({ id: x.id, name: x.name, mode: x.mode, p: x.p })),
+      people: this.peopleList.map((x) => ({ id: x.id, name: x.name, mode: x.mode, p: x.p, torch: !!x.torch })),
       figures: [...this.people.figures.keys()],
+      torch: this.light,
+      torches: this.people.torches(), // the others' that are on: [{id, lit}]
       connected: this.people.connected,
       fps: Math.round(this._fps),
     };

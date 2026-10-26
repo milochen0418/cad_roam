@@ -27,9 +27,11 @@ from cad_roam.states.room import ModelRoom, room_token
 
 try:
     from reflex_ddns_auth import AuthState
+    from reflex_ddns_auth.intent import Intent
     from reflex_ddns_auth.intent.registry import resolve_openers
 except ImportError:  # runs without sign-in: everyone is a guest
     AuthState = None
+    Intent = None
     resolve_openers = None
 
 # Sizes offered for a model, metres per unit.
@@ -88,7 +90,8 @@ class ModelState(rx.State):
     gone: bool = False
     # It has an STL (it built in Codoc in CAD at least once).
     built: bool = True
-    # Who this tab is: {"peer", "user", "name", "email", "avatar", "color"}.
+    # Who this tab is: {"peer", "user", "name", "email", "avatar", "profile", "color"}; "profile"
+    # is their name in Relack, whose profile is theirs ("" for a guest here).
     me: dict[str, str] = {}
     _peer: str = ""
     _guest: str = ""
@@ -121,7 +124,7 @@ class ModelState(rx.State):
 
     async def _identify(self) -> None:
         """Who this tab is: the signed-in account (reflex_ddns_auth), else a guest."""
-        email = name = avatar = ""
+        email = name = avatar = profile = ""
         if AuthState is not None:
             try:
                 auth = await self.get_state(AuthState)
@@ -129,6 +132,8 @@ class ModelState(rx.State):
                     await auth.load_auth()
                 if auth.is_logged_in:
                     email, name, avatar = auth.user_email, auth.user_name or auth.user_email, auth.user_avatar
+                    # Relack knows a Google account by its e-mail, a Relack guest by their nickname.
+                    profile = email or auth.user_name
             except Exception:
                 pass
         if not self._peer:
@@ -140,14 +145,14 @@ class ModelState(rx.State):
                 self._guest = str(random.randint(1000, 9999))
             # A Relack guest is signed in with a nickname but no email: keep the nickname.
             user, name = f"guest-{self._guest}", name or f"Guest {self._guest}"
-        me = {"peer": self._peer, "user": user, "name": name, "email": email, "avatar": avatar, "color": (self.me or {}).get("color", "")}
+        me = {"peer": self._peer, "user": user, "name": name, "email": email, "avatar": avatar, "profile": profile, "color": (self.me or {}).get("color", "")}
         if me != self.me:
             self.me = me
 
     def _enter(self) -> None:
         """Puts this tab among the people at its model."""
         me = self.me
-        tab = presence.enter(self.model, self._peer, self.router.session.client_token, me["user"], me["name"], me.get("avatar", ""))
+        tab = presence.enter(self.model, self._peer, self.router.session.client_token, me["user"], me["name"], me.get("avatar", ""), me.get("profile", ""))
         if me.get("color") != tab.color:
             self.me = {**me, "color": tab.color}
 
@@ -331,9 +336,19 @@ class ModelState(rx.State):
                 self._enter()
                 self._command("rejoined")
             return None
+        if kind == "profile":
+            return await self._profile(str(e.get("peer") or ""))
         if kind == "error":
             return rx.toast.error(str(e.get("text") or ""), position="bottom-center")
         return None
+
+    async def _profile(self, peer: str):
+        """Someone's profile (Relack's), as a dialog over the page; by their tab here, so what
+        opens is whom the place knows (and nobody's e-mail goes into a URL)."""
+        tab = presence.tab(self.model, peer) if self.model and peer else None
+        if Intent is None or tab is None or not tab.profile:
+            return None
+        return Intent.start("relack", "profile.view", private={"user": tab.profile}, label=await text(self, "profile"))
 
     @rx.event
     def to_entrance(self):

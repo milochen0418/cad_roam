@@ -12,6 +12,7 @@ KEY = "cad/house00001"
 @pytest.fixture
 def client(root):
     presence._worlds.clear()
+    presence._suns.clear()
     publish_model(root, "house00001", "# 1 unit = 1 m\n", (12, 10, 8), title="House")
     from cad_roam import api
 
@@ -65,10 +66,29 @@ def test_people_see_each_other_move(client):
             assert len(a.receive_json()["people"]) == 2
             b.send_text(json.dumps({"t": "pose", "p": [1, 2, 3], "yaw": 0.5, "pitch": 0, "mode": "fly", "moving": True}))
             moved = a.receive_json()
-            assert moved == {"t": "pose", "id": "pb", "p": [1.0, 2.0, 3.0], "yaw": 0.5, "pitch": 0.0, "mode": "fly", "moving": True}
+            assert moved == {"t": "pose", "id": "pb", "p": [1.0, 2.0, 3.0], "yaw": 0.5, "pitch": 0.0, "mode": "fly", "moving": True, "torch": False}
         # Ben's view closed: Ann sees him go.
         assert [p["name"] for p in a.receive_json()["people"]] == ["Ann"]
     assert presence.where("pb") == ""
+
+
+def test_everyone_has_the_same_sun(client):
+    presence.enter(KEY, "pa", "ta", "ann@x", "Ann")
+    presence.enter(KEY, "pb", "tb", "ben@x", "Ben")
+    with client.websocket_connect(f"/_roam/ws/{KEY}") as a:
+        # The first one in brings their time ...
+        a.send_text(json.dumps({"t": "hello", "peer": "pa", "token": "ta", "time": 16.5}))
+        assert a.receive_json()["sun"] == {"time": 16.5, "seq": 1, "peer": "pa", "name": "Ann"}
+        a.receive_json()  # people
+        with client.websocket_connect(f"/_roam/ws/{KEY}") as b:
+            # ... the next one gets it.
+            b.send_text(json.dumps({"t": "hello", "peer": "pb", "token": "tb", "time": 7.5}))
+            assert b.receive_json()["sun"]["time"] == 16.5
+            b.receive_json(), a.receive_json()  # people
+            # Ben moves it: everyone hears, Ben too.
+            b.send_text(json.dumps({"t": "sun", "time": 9.25}))
+            moved = {"t": "sun", "time": 9.25, "seq": 2, "peer": "pb", "name": "Ben"}
+            assert a.receive_json() == moved and b.receive_json() == moved
 
 
 def test_an_unknown_tab_is_asked_to_enter_again(client):

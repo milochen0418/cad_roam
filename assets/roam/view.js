@@ -47,8 +47,9 @@ function savedView() {
   }
 }
 
-// How far from `from` along `dir` (a unit vector) nothing is in the way, up to `far`.
-function reach(colliders, from, dir, far) {
+// How far from `from` along `dir` (a unit vector) nothing is in the way, up to `far` (also how far
+// the others' torch beams go: people.js).
+export function reach(colliders, from, dir, far) {
   _ray.origin.copy(from);
   _ray.direction.copy(dir);
   let free = far;

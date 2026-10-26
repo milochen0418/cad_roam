@@ -10,7 +10,7 @@ import * as THREE from "three";
 import { MeshBVH } from "three-mesh-bvh";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
-import { isGlowing } from "./look.js";
+import { FLAT_DEPTH, isGlowing } from "./look.js";
 
 const STONES = [0xefe9df, 0xe7dcc6, 0xdcc9a7, 0xd9e2d4, 0xdde1e6, 0xeadad3];
 const PAVING = 0xd8d2c4;
@@ -223,6 +223,7 @@ export class Thing {
       );
       ped.position.set(t.x, t.base / 2, t.z);
       ped.castShadow = ped.receiveShadow = true;
+      ped.customDepthMaterial = FLAT_DEPTH;
       ped.userData.key = this.key;
       this.group.add(ped);
       this.pickables.push(ped);

@@ -14,24 +14,33 @@ A tab whose socket closes leaves at once (the others see it go); one entered but
 is dropped after ``IDLE`` seconds without its page's ping. Tabs are known to each other by
 ``peer`` only; the client token stays on the server.
 
+The sun's time of day is the place's, the same for everyone there: the first one in brings
+theirs (their hello's ``time``), and anyone there moves it for everyone (``sun``). Each move gets
+the next ``seq`` and goes to everyone, the one who moved it too, so two people dragging the sun at
+the same moment both end at the move the server took last. A place nobody is in forgets it.
+
 Messages, JSON both ways:
 
-    tab -> server   {"t": "hello", "peer", "token", "visible", "quality"}
-                    {"t": "pose", "p": [x, y, z], "yaw", "pitch", "mode": "walk"|"fly", "moving", "time"}
+    tab -> server   {"t": "hello", "peer", "token", "visible", "quality", "time"}
+                    {"t": "pose", "p": [x, y, z], "yaw", "pitch", "mode": "walk"|"fly", "moving", "time", "torch"}
+                    {"t": "sun", "time"}                    the person moved the sun
                     {"t": "seen", "visible"}                the tab was shown or hidden
                     {"t": "shot", "id", ...}                the answer to a "shoot"
-    server -> tab   {"t": "welcome", "peer", "rev"}       accepted; rev = the place's version
+    server -> tab   {"t": "welcome", "peer", "rev", "sun"}  accepted; rev = the place's version
                     {"t": "rejoin"}                         unknown tab: enter again, then hello
                     {"t": "people", "people": [person...]}  whenever someone comes or goes
-                    {"t": "pose", "id": peer, ...}          someone moved
+                    {"t": "pose", "id": peer, ...}          someone moved (or lit their torch)
+                    {"t": "sun", "time", "seq", "peer", "name"}  someone moved the sun
                     {"t": "world", "rev"}                   the model changed: fetch it again
                     {"t": "shoot", "id", ...}               a picture for an AI (cad_roam/eyes.py)
 
-    person = {"id", "user", "name", "color", "avatar", "p", "yaw", "pitch", "mode", "time"}
+    person = {"id", "user", "name", "color", "avatar", "profile", "p", "yaw", "pitch", "mode", "torch", "time"}
 
 ``visible`` says whether the tab is on a screen, ``quality`` how it draws ("high": shadows and
 the light inside), ``time`` the sun's time of day it shows: what an AI's picture is taken with
-(:func:`cameras`).
+(:func:`cameras`). ``torch`` says the person's torch is on (the others see its light), ``profile``
+whose profile is theirs in Relack (their e-mail, or a Relack guest's nickname; "" for a guest
+here).
 """
 
 from __future__ import annotations
@@ -63,12 +72,14 @@ class Tab:
     user: str
     name: str
     avatar: str = ""
+    profile: str = ""  # their name in Relack, for their profile ("" for a guest here)
     color: str = ""
     last_seen: float = 0.0
     p: list[float] = dataclasses.field(default_factory=lambda: [0.0, 0.0, 0.0])
     yaw: float = 0.0
     pitch: float = 0.0
     mode: str = "walk"
+    torch: bool = False  # their torch is on
     socket: Any = None  # the open WebSocket, if any
     visible: bool = True  # on a screen (not a tab in the background)
     quality: str = ""  # "high" (shadows and the light inside) or "low"
@@ -76,14 +87,16 @@ class Tab:
 
     def person(self) -> dict:
         return {
-            "id": self.peer, "user": self.user, "name": self.name, "color": self.color, "avatar": self.avatar,
-            "p": self.p, "yaw": self.yaw, "pitch": self.pitch, "mode": self.mode, "time": self.time,
+            "id": self.peer, "user": self.user, "name": self.name, "color": self.color, "avatar": self.avatar, "profile": self.profile,
+            "p": self.p, "yaw": self.yaw, "pitch": self.pitch, "mode": self.mode, "torch": self.torch, "time": self.time,
         }
 
 
 _lock = threading.Lock()
 # model key -> peer -> tab, in the order they came.
 _worlds: dict[str, dict[str, Tab]] = {}
+# model key -> its sun: {"time": hours, "seq": its moves so far, "peer" and "name": who moved it last}.
+_suns: dict[str, dict] = {}
 
 
 def _color_for(tabs: dict[str, Tab], user: str) -> str:
@@ -98,7 +111,7 @@ def _color_for(tabs: dict[str, Tab], user: str) -> str:
     return next((c for c in COLORS if c not in taken), COLORS[len(used) % len(COLORS)])
 
 
-def enter(world: str, peer: str, token: str, user: str, name: str, avatar: str = "", now: float | None = None) -> Tab:
+def enter(world: str, peer: str, token: str, user: str, name: str, avatar: str = "", profile: str = "", now: float | None = None) -> Tab:
     """Puts a tab in a world (or finds it there again); it leaves any other world."""
     now = time.time() if now is None else now
     with _lock:
@@ -107,9 +120,9 @@ def enter(world: str, peer: str, token: str, user: str, name: str, avatar: str =
         tabs = _worlds.setdefault(world, {})
         tab = tabs.get(peer)
         if tab is None:
-            tab = tabs[peer] = Tab(peer, token, user, name, avatar)
+            tab = tabs[peer] = Tab(peer, token, user, name, avatar, profile)
         else:
-            tab.token, tab.user, tab.name, tab.avatar = token, user, name, avatar
+            tab.token, tab.user, tab.name, tab.avatar, tab.profile = token, user, name, avatar, profile
         if not tab.color:
             tab.color = _color_for({k: t for k, t in tabs.items() if k != peer}, user)
         tab.last_seen = now
@@ -123,6 +136,7 @@ def _drop(world: str, peer: str) -> Tab | None:
     tab = tabs.pop(peer, None)
     if not tabs:
         del _worlds[world]
+        _suns.pop(world, None)
     return tab
 
 
@@ -216,6 +230,34 @@ def _number(value: Any, default: float = 0.0, limit: float = 1e6) -> float:
     return f if math.isfinite(f) and abs(f) <= limit else default
 
 
+def _hours(value: Any) -> float | None:
+    """A time of the day (hours, 0 to 24), or None."""
+    hours = _number(value, default=-1.0, limit=24)
+    return round(hours, 4) if hours >= 0 else None
+
+
+def sun(world: str) -> dict | None:
+    """The world's sun ({"time", "seq", "peer", "name"}), None before anyone brought one."""
+    with _lock:
+        s = _suns.get(world)
+        return dict(s) if s else None
+
+
+def move_sun(world: str, peer: str, hours: Any, first: bool = False) -> dict | None:
+    """The tab ``peer`` moves the world's sun to ``hours``; with ``first``, only when it has none
+    yet (the first one in brings their time). The world's sun after it, None when the tab isn't
+    there, ``hours`` isn't a time of the day or (``first``) it had one already."""
+    hours = _hours(hours)
+    with _lock:
+        t = _worlds.get(world, {}).get(peer)
+        if t is None or hours is None or (first and world in _suns):
+            return None
+        seq = _suns[world]["seq"] + 1 if world in _suns else 1
+        _suns[world] = {"time": hours, "seq": seq, "peer": peer, "name": t.name}
+        t.time = hours
+        return dict(_suns[world])
+
+
 class Hub:
     """The open sockets of every world, and sending to them."""
 
@@ -284,11 +326,12 @@ class Hub:
             t.yaw = round(_number(data.get("yaw"), limit=1e3), 4)
             t.pitch = round(_number(data.get("pitch"), limit=10), 4)
             t.mode = mode
-            hours = _number(data.get("time"), default=-1.0, limit=24)
-            if hours >= 0:
+            hours = _hours(data.get("time"))
+            if hours is not None:
                 t.time = hours
+            t.torch = data.get("torch") is True
             t.last_seen = time.time()
-            return {"t": "pose", "id": peer, "p": t.p, "yaw": t.yaw, "pitch": t.pitch, "mode": t.mode, "moving": bool(data.get("moving"))}
+            return {"t": "pose", "id": peer, "p": t.p, "yaw": t.yaw, "pitch": t.pitch, "mode": t.mode, "moving": bool(data.get("moving")), "torch": t.torch}
 
     def _note(self, world: str, peer: str, data: dict) -> None:
         """What the tab says of itself: on a screen or not, how it draws."""
@@ -344,7 +387,8 @@ class Hub:
                 peer = ""
                 return
             self._note(world, peer, hello)
-            await self._send(socket, {"t": "welcome", "peer": peer, "rev": self.rev_of(world)})
+            move_sun(world, peer, hello.get("time"), first=True)
+            await self._send(socket, {"t": "welcome", "peer": peer, "rev": self.rev_of(world), "sun": sun(world)})
             await self.people_changed(world)
             while True:
                 data = json.loads(await socket.receive_text())
@@ -354,6 +398,10 @@ class Hub:
                     message = self.pose(world, peer, data)
                     if message is not None:
                         await self.broadcast(world, message, but=peer)
+                elif data.get("t") == "sun":
+                    moved = move_sun(world, peer, data.get("time"))
+                    if moved is not None:
+                        await self.broadcast(world, {"t": "sun", **moved})
                 elif data.get("t") == "ping":
                     touch(world, peer)
                 elif data.get("t") == "seen":

@@ -156,10 +156,11 @@ export class Eyes {
     // The glass as the sun sees it from there (no eyes used to the dark yet: they are measured here).
     e.look.frame(null, 0);
     const eye = e.look.light.eyeAt(cam.position);
-    // Neither your figure (seen from behind) nor your torch in it.
+    // Neither your figure (seen from behind) nor your torch in it, nor the others' torches.
     const me = e.view.me && e.view.me.group, shown = !!(me && me.visible), torch = e.torch.intensity;
     if (me) me.visible = false;
     e.torch.intensity = 0;
+    const others = e.people.dim();
     const exposure = r.toneMappingExposure, ratio = r.getPixelRatio();
     const gl = r.getContext(), pixels = new Uint8Array(w * h * 4);
     try {
@@ -173,6 +174,7 @@ export class Eyes {
       e.resize();
       r.toneMappingExposure = exposure;
       e.torch.intensity = torch;
+      others();
       if (me) me.visible = shown;
     }
     return {

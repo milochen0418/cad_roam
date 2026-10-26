@@ -30,6 +30,17 @@ export const SOLID_LAYER = 1;
 // and a blue one to white. At glow 1 it shows its colour as it is, by day and in the dark.
 const LIT_BY_OTHERS = 0.25;
 
+// What casts shadows is drawn into them with this (its customDepthMaterial): three.js' own, but in
+// plain depth. The renderer keeps a logarithmic one (engine.js), and three.js draws the shadows
+// of a torch (a spot light, seen through a perspective camera) in it, while the surfaces it falls
+// on compare their plain depth with that: each of them would be in its own shadow. The sun's
+// shadows (an orthographic camera) are drawn in plain depth either way.
+export const FLAT_DEPTH = new THREE.MeshDepthMaterial();
+FLAT_DEPTH.onBeforeCompile = (shader) => {
+  shader.fragmentShader = shader.fragmentShader.replace("#include <logdepthbuf_fragment>", "");
+};
+FLAT_DEPTH.customProgramCacheKey = () => "roam-flat-depth";
+
 // The shader of the lights, as three.js has it: what is added goes after (or before) `anchor`,
 // found after `section`.
 function patched(chunk, edits) {
@@ -207,6 +218,7 @@ export class Look {
   // A solid part of a model: it casts shadows and shows in the pictures from the sun.
   solid(mesh) {
     mesh.castShadow = this.shadows;
+    mesh.customDepthMaterial = FLAT_DEPTH;
     mesh.receiveShadow = true;
     mesh.layers.enable(SOLID_LAYER);
     return mesh;

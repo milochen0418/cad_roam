@@ -1,7 +1,7 @@
 // What is drawn over the 3D view: the crosshair and what it points at, walk / drone, your eyes /
 // from behind, the drone's readings, the sun's time, the keys, models still loading (or left
 // unloaded), the question before a big model loads, the map, the people here (a click flies to
-// them) and, on touch screens, a stick and buttons.
+// them, the button beside opens their profile) and, on touch screens, a stick and buttons.
 
 import { initials } from "./people.js";
 
@@ -22,9 +22,17 @@ function bytes(n) {
 }
 
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+// Someone's profile (Lucide's "user-round").
+const PROFILE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>';
+
+// A time of the day (hours) as hh:mm.
+export function clock(hours) {
+  const m = Math.round(hours * 60);
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
 
 export class Hud {
-  constructor(root, { labels, touch, onMode, onView, onFollow, onStick, onRise, onAction, sunTimes, onSunTime }) {
+  constructor(root, { labels, touch, onMode, onView, onFollow, onProfile, onStick, onRise, onAction, sunTimes, onSunTime }) {
     this.labels = labels || {};
     this.touch = touch;
     this.root = el("div", "rm-hud", root);
@@ -75,6 +83,7 @@ export class Hud {
     this.people = el("div", "rm-people", this.root);
     this.people.addEventListener("pointerdown", (e) => e.stopPropagation());
     this.onFollow = onFollow;
+    this.onProfile = onProfile;
     this.onAction = onAction;
     this.notice = el("div", "rm-notice", this.root);
 
@@ -209,8 +218,7 @@ export class Hud {
   // The sun's time (hours) on the slider and as hh:mm.
   setSunTime(hours) {
     this.sunRange.value = String(hours);
-    const m = Math.round(hours * 60);
-    this.sunTime.textContent = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    this.sunTime.textContent = clock(hours);
   }
 
   setLocked(locked) {
@@ -272,11 +280,14 @@ export class Hud {
     }
   }
 
+  // The others here: a chip each (a click flies to them), and beside it a button for the profile of
+  // someone signed in.
   setPeople(list, me) {
     this.people.innerHTML = "";
     for (const p of list) {
       if (p.id === me) continue;
-      const chip = el("button", "rm-chip", this.people);
+      const row = el("div", "rm-chip-row", this.people);
+      const chip = el("button", "rm-chip", row);
       chip.type = "button";
       chip.style.setProperty("--c", p.color);
       chip.title = this.t("follow", "Go to {name}").replace("{name}", p.name);
@@ -294,6 +305,18 @@ export class Hud {
       chip.addEventListener("click", (e) => {
         e.stopPropagation();
         this.onFollow(p.id);
+      });
+      if (!p.profile) continue;
+      const profile = el("button", "rm-chip-profile", row);
+      profile.type = "button";
+      profile.style.setProperty("--c", p.color);
+      profile.dataset.peer = p.id;
+      profile.title = this.t("profile_of", "{name}'s profile").replace("{name}", p.name);
+      profile.setAttribute("aria-label", profile.title);
+      profile.innerHTML = PROFILE_ICON;
+      profile.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.onProfile(p.id);
       });
     }
   }

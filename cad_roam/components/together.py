@@ -9,7 +9,7 @@ import reflex as rx
 from cad_roam.call import CALLS_ENABLED, CallState
 from cad_roam.states.lang import LangState
 from cad_roam.states.room import ModelRoom
-from cad_roam.states.model import AuthState, ModelState
+from cad_roam.states.model import AuthState, Intent, ModelState
 
 T = LangState.t
 
@@ -32,14 +32,27 @@ def share_button() -> rx.Component:
 
 
 def identity() -> rx.Component:
-    """Who you are here, and signing in or out (with reflex_ddns_auth)."""
+    """Who you are here (signed in, a click opens your profile), and signing in or out (with
+    reflex_ddns_auth)."""
     link = "text-xs whitespace-nowrap hover:underline"
-    name = rx.el.span(
-        ModelState.me["name"],
-        id="me-name",
-        class_name="text-xs font-medium text-slate-100 whitespace-nowrap max-w-[8rem] truncate",
-        style={"borderBottom": "2px solid " + ModelState.me["color"].to(str)},
-    )
+    look = "text-xs font-medium text-slate-100 whitespace-nowrap max-w-[8rem] truncate"
+    underline = {"borderBottom": "2px solid " + ModelState.me["color"].to(str)}
+    name = rx.el.span(ModelState.me["name"], id="me-name", class_name=look, style=underline)
+    if Intent is not None:
+        # Your profile is Relack's (a dialog over the page); a guest here has none.
+        name = rx.cond(
+            ModelState.me["profile"],
+            rx.el.button(
+                ModelState.me["name"],
+                on_click=Intent.start("relack", "profile.view", private={"user": ModelState.me["profile"]}, label=T["profile"]),
+                id="me-name",
+                type="button",
+                title=T["your_profile"],
+                class_name=f"{look} cursor-pointer hover:text-white",
+                style=underline,
+            ),
+            name,
+        )
     if AuthState is None:
         return rx.el.div(name, class_name="hidden sm:flex items-center gap-2")
     return rx.el.div(

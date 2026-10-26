@@ -8,7 +8,7 @@ Playwright end-to-end suites, one per folder:
 Each `run_test.py` exits `0` on success and non-zero on failure, and writes its screenshots into
 `OUTPUT_DIR` (provided by the runner). Shared helpers (a browser with software WebGL, opening a
 model's page and waiting for it to load, holding a key for some of the 3D view's own time,
-reading the engine's state through `window.__roam`, waiting for the light inside and reading it at a point of a model) are in `common.py`.
+reading the engine's state through `window.__roam`, waiting for the light inside and reading it at a point of a model, signing a browser in as someone with the platform's cookie) are in `common.py`.
 
 Every run builds its own small `cad-models` collection with `fixtures.py` in
 `OUTPUT_DIR/collections` (a 10 x 8 m house with a door and steps up to a platform, a 30 m tower in
@@ -31,6 +31,7 @@ before it starts the server.
 | `colours` | The chapel is drawn from its GLB (5 colours, 1 of them glass, 1 glowing), with shadows on; at 10:30 no blue light inside; T jumps to 16:30 and 7:30, and in the morning sun the floor and the wall in front of its east window turn blue (counted in the drawn pixels); the ☀ slider dragged to 16:30 takes the blue away, and from under its lamp the lamp is bright in its warm colour, far brighter than the roof round it; the time is kept over a reload; the house, with only an STL, is one colour. |
 | `light` | With shadows on, the chapel's light inside is worked out (read with `light_at`); beside its lamp a face turned to it gets many times the light of one turned away, warm, and the same under it; in the morning the light in the chapel is far bluer than in the evening (the patch of sunlight its blue window throws), the evening's not blue; inside, the view is brighter than outside, and outside as before; outside, the chapel's back wall in its shade gets about the light of a wall in the open, and the house's roof about that of a roof (not the dark of a night); the house's floor gets far less light than its roof; Fast works out none. |
 | `eyes` | An AI's pictures through the tool endpoint (`DDNS_AUTH_SECRET` from its `server.env`): from inside the chapel, looking at the floor in front of its blue window, blue in the morning (about as blue as the person's own view there) and not in the evening, with what the page measured; the person's place, view and time unchanged, the sun back at their time a moment later, a note on their page; `roam.where` finds them at the entrance; `roam.tour` takes two smaller pictures; with the page drawing nothing (as in the background) and the chapel rebuilt, the picture is of the new build; with nobody there, the answer names the page to open. |
+| `shared` | Ann and Ben, signed in (cookies made with the secret in its `server.env`), and a guest at the chapel: beside Ben's chip a button opens his profile (Relack's User Profile, in a dialog, asked for him privately: his e-mail isn't in its address), Ann's name opens hers, the guest has none (no button, their name not a button); the sun Ann drags to 16:30 is at 16:30 for Ben too, with a note that Ann moved it; Ben's T moves Ann's sun; dragged by both at the same moment, both end at the same time; the guest comes with 12:00 of their own and gets the chapel's time; Ben's torch, inside, lights the wall Ann (with shadows) looks at and its lamp shows on his head; from outside, none of it reaches the grass behind the wall he shines at, while out in the open it lights the grass; off, it is gone from Ann's page; Ben leaving frees his light. |
 | `big_model` | With `CAD_ROAM_MAX_TRIANGLES=100` (its `server.env`), the chapel's GLB (156 triangles) asks before it loads, with its triangles against the limit, the download and the memory, and fetches nothing yet; Don't load leaves its outline, "not loaded" and Load it at the top left, which loads it in its colours; a new page asks again, and after Load it the chapel's next build comes in without a question; the house, an STL over the limit, loads simplified without one; the question in 繁體中文. |
 
 ## Running
@@ -45,6 +46,7 @@ poetry run ./run_test_suite.sh colours
 poetry run ./run_test_suite.sh light
 poetry run ./run_test_suite.sh big_model
 poetry run ./run_test_suite.sh eyes
+poetry run ./run_test_suite.sh shared
 ```
 
 If ports 3000/8000 belong to another app, use others: `FRONTEND_PORT=3150 BACKEND_PORT=8150`.
