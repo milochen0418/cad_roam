@@ -16,15 +16,22 @@ is dropped after ``IDLE`` seconds without its page's ping. Tabs are known to eac
 
 Messages, JSON both ways:
 
-    tab -> server   {"t": "hello", "peer", "token"}
-                    {"t": "pose", "p": [x, y, z], "yaw", "pitch", "mode": "walk"|"fly", "moving"}
+    tab -> server   {"t": "hello", "peer", "token", "visible", "quality"}
+                    {"t": "pose", "p": [x, y, z], "yaw", "pitch", "mode": "walk"|"fly", "moving", "time"}
+                    {"t": "seen", "visible"}                the tab was shown or hidden
+                    {"t": "shot", "id", ...}                the answer to a "shoot"
     server -> tab   {"t": "welcome", "peer", "rev"}       accepted; rev = the place's version
                     {"t": "rejoin"}                         unknown tab: enter again, then hello
                     {"t": "people", "people": [person...]}  whenever someone comes or goes
                     {"t": "pose", "id": peer, ...}          someone moved
                     {"t": "world", "rev"}                   the model changed: fetch it again
+                    {"t": "shoot", "id", ...}               a picture for an AI (cad_roam/eyes.py)
 
-    person = {"id", "user", "name", "color", "avatar", "p", "yaw", "pitch", "mode"}
+    person = {"id", "user", "name", "color", "avatar", "p", "yaw", "pitch", "mode", "time"}
+
+``visible`` says whether the tab is on a screen, ``quality`` how it draws ("high": shadows and
+the light inside), ``time`` the sun's time of day it shows: what an AI's picture is taken with
+(:func:`cameras`).
 """
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ import logging
 import math
 import threading
 import time
+import uuid
 from typing import Any
 
 log = logging.getLogger("roam.presence")
@@ -62,11 +70,14 @@ class Tab:
     pitch: float = 0.0
     mode: str = "walk"
     socket: Any = None  # the open WebSocket, if any
+    visible: bool = True  # on a screen (not a tab in the background)
+    quality: str = ""  # "high" (shadows and the light inside) or "low"
+    time: float | None = None  # the sun's time of day it shows (hours)
 
     def person(self) -> dict:
         return {
             "id": self.peer, "user": self.user, "name": self.name, "color": self.color, "avatar": self.avatar,
-            "p": self.p, "yaw": self.yaw, "pitch": self.pitch, "mode": self.mode,
+            "p": self.p, "yaw": self.yaw, "pitch": self.pitch, "mode": self.mode, "time": self.time,
         }
 
 
@@ -183,6 +194,20 @@ def tab(world: str, peer: str) -> Tab | None:
         return dataclasses.replace(t, socket=None) if t is not None else None
 
 
+def cameras(world: str) -> list[Tab]:
+    """The tabs in a world that can take a picture (their 3D view is connected), the best first:
+    drawing with shadows and the light inside, on a screen, the last heard from."""
+    with _lock:
+        tabs = [dataclasses.replace(t, socket=None) for t in _worlds.get(world, {}).values() if t.socket is not None]
+    return sorted(tabs, key=lambda t: (t.quality != "high", not t.visible, -t.last_seen))
+
+
+def opening(world: str) -> bool:
+    """Someone has just come to the world: their 3D view hasn't connected yet."""
+    with _lock:
+        return any(t.socket is None for t in _worlds.get(world, {}).values())
+
+
 def _number(value: Any, default: float = 0.0, limit: float = 1e6) -> float:
     try:
         f = float(value)
@@ -197,6 +222,8 @@ class Hub:
     def __init__(self) -> None:
         self.rev_of = lambda world: 0  # set by the API: the world's current rev
         self._tasks: set[asyncio.Task] = set()
+        # Requests to tabs waiting for their answer: id -> (the tab's socket, the answer).
+        self._asks: dict[str, tuple[Any, asyncio.Future]] = {}
 
     def later(self, coro) -> None:
         """Runs ``coro`` on its own, e.g. telling the others someone left while that tab's
@@ -257,8 +284,54 @@ class Hub:
             t.yaw = round(_number(data.get("yaw"), limit=1e3), 4)
             t.pitch = round(_number(data.get("pitch"), limit=10), 4)
             t.mode = mode
+            hours = _number(data.get("time"), default=-1.0, limit=24)
+            if hours >= 0:
+                t.time = hours
             t.last_seen = time.time()
             return {"t": "pose", "id": peer, "p": t.p, "yaw": t.yaw, "pitch": t.pitch, "mode": t.mode, "moving": bool(data.get("moving"))}
+
+    def _note(self, world: str, peer: str, data: dict) -> None:
+        """What the tab says of itself: on a screen or not, how it draws."""
+        with _lock:
+            t = _worlds.get(world, {}).get(peer)
+            if t is None:
+                return
+            if isinstance(data.get("visible"), bool):
+                t.visible = data["visible"]
+            if data.get("quality") in ("high", "low"):
+                t.quality = data["quality"]
+
+    async def ask(self, world: str, peer: str, message: dict, timeout: float) -> dict:
+        """Sends one tab a request (``message`` gets an ``id``) and waits for its answer, the
+        message it sends back with that ``id``. TimeoutError when none comes in time,
+        ConnectionError when the tab is gone (or goes meanwhile)."""
+        with _lock:
+            t = _worlds.get(world, {}).get(peer)
+            socket = t.socket if t is not None else None
+        if socket is None:
+            raise ConnectionError("the tab has left")
+        key = uuid.uuid4().hex[:12]
+        answer = asyncio.get_running_loop().create_future()
+        self._asks[key] = (socket, answer)
+        try:
+            try:
+                await socket.send_text(json.dumps({**message, "id": key}, ensure_ascii=False))
+            except Exception as e:
+                raise ConnectionError("the tab has left") from e
+            return await asyncio.wait_for(answer, timeout)
+        finally:
+            self._asks.pop(key, None)
+
+    def _answered(self, socket: Any, data: dict) -> None:
+        asked = self._asks.get(str(data.get("id") or ""))
+        if asked is not None and asked[0] is socket and not asked[1].done():
+            asked[1].set_result(data)
+
+    def _closed(self, socket: Any) -> None:
+        """A socket closed: what was asked of its tab won't be answered."""
+        for asked, answer in list(self._asks.values()):
+            if asked is socket and not answer.done():
+                answer.set_exception(ConnectionError("the tab has left"))
 
     async def serve(self, world: str, socket: Any) -> None:
         """One tab's socket, from its hello until it closes."""
@@ -270,6 +343,7 @@ class Hub:
                 await self._send(socket, {"t": "rejoin"})
                 peer = ""
                 return
+            self._note(world, peer, hello)
             await self._send(socket, {"t": "welcome", "peer": peer, "rev": self.rev_of(world)})
             await self.people_changed(world)
             while True:
@@ -282,11 +356,16 @@ class Hub:
                         await self.broadcast(world, message, but=peer)
                 elif data.get("t") == "ping":
                     touch(world, peer)
+                elif data.get("t") == "seen":
+                    self._note(world, peer, data)
+                elif data.get("t") == "shot":
+                    self._answered(socket, data)
         except (asyncio.TimeoutError, ValueError):
             pass
         except Exception:  # the socket closed (WebSocketDisconnect and friends)
             pass
         finally:
+            self._closed(socket)
             if peer and self.detach(world, peer, socket):
                 self.later(self.people_changed(world))
 

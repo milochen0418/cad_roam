@@ -30,6 +30,7 @@ before it starts the server.
 | `live_update` | The house rebuilt in its collection (as Codoc in CAD does on Run) is swapped in while you are there; a model that never built appears the moment it builds, with you in front of it. |
 | `colours` | The chapel is drawn from its GLB (5 colours, 1 of them glass, 1 glowing), with shadows on; at 10:30 no blue light inside; T jumps to 16:30 and 7:30, and in the morning sun the floor and the wall in front of its east window turn blue (counted in the drawn pixels); the ☀ slider dragged to 16:30 takes the blue away, and from under its lamp the lamp is bright in its warm colour, far brighter than the roof round it; the time is kept over a reload; the house, with only an STL, is one colour. |
 | `light` | With shadows on, the chapel's light inside is worked out (read with `light_at`); beside its lamp a face turned to it gets many times the light of one turned away, warm, and the same under it; in the morning the light in the chapel is blue (its window), in the evening not; inside, the view is brighter than outside, and outside as before; the house's floor gets far less light than its roof; Fast works out none. |
+| `eyes` | An AI's pictures through the tool endpoint (`DDNS_AUTH_SECRET` from its `server.env`): from inside the chapel, looking at the floor in front of its blue window, blue in the morning (about as blue as the person's own view there) and not in the evening, with what the page measured; the person's place, view and time unchanged, the sun back at their time a moment later, a note on their page; `roam.where` finds them at the entrance; `roam.tour` takes two smaller pictures; with the page drawing nothing (as in the background) and the chapel rebuilt, the picture is of the new build; with nobody there, the answer names the page to open. |
 | `big_model` | With `CAD_ROAM_MAX_TRIANGLES=100` (its `server.env`), the chapel's GLB (156 triangles) asks before it loads, with its triangles against the limit, the download and the memory, and fetches nothing yet; Don't load leaves its outline, "not loaded" and Load it at the top left, which loads it in its colours; a new page asks again, and after Load it the chapel's next build comes in without a question; the house, an STL over the limit, loads simplified without one; the question in 繁體中文. |
 
 ## Running
@@ -43,6 +44,7 @@ poetry run ./run_test_suite.sh live_update
 poetry run ./run_test_suite.sh colours
 poetry run ./run_test_suite.sh light
 poetry run ./run_test_suite.sh big_model
+poetry run ./run_test_suite.sh eyes
 ```
 
 If ports 3000/8000 belong to another app, use others: `FRONTEND_PORT=3150 BACKEND_PORT=8150`.

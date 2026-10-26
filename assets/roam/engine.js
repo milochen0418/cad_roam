@@ -10,11 +10,14 @@
 // The page (world.jsx) passes commands in ({type: "goto" | "follow" | "mode" | "reload" |
 // "release" | "rejoined", ...}) and hears back through onEvent ({type: "ready" | "select" |
 // "rejoin" | "world" | "gone" | "mode" | "error", ...}). window.__roam is this engine, for tests.
+//
+// An AI may ask this page for a picture of the model from inside it (eyes.js); your view stays yours.
 
 import * as THREE from "three";
 import { acceleratedRaycast } from "three-mesh-bvh";
 import { Sky } from "three/addons/objects/Sky.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import { Eyes } from "./eyes.js";
 import { Hud } from "./hud.js";
 import { Input } from "./input.js";
 import { LIGHT_BYTES } from "./light.js";
@@ -102,6 +105,7 @@ export class Engine {
     this.selected = "";
     this.light = false;
     this.quality = opts.quality || "high";
+    this.exposure = EXPOSURE;
     this.peopleList = [];
     this._spawned = false;
     this._tween = null;
@@ -110,9 +114,11 @@ export class Engine {
     this._slow = 0;
     this._fps = 0;
     this._frames = 0;
+    this._waiters = []; // for changed()
 
     this._setupRenderer();
     this._setupScene();
+    this.eyes = new Eyes(this);
     this.player = new Player();
     this.view = new View(this.scene, this.look);
     this.view.setColor((opts.me || {}).color);
@@ -139,6 +145,8 @@ export class Engine {
       look: this.look,
       wsUrl: this.url(`/_roam/ws/${this.path}`).replace(/^http/, "ws"),
       peer: (opts.me || {}).peer,
+      quality: this.quality,
+      onShoot: (req) => this.eyes.shoot(req),
       onRejoin: () => this._emit({ type: "rejoin" }),
       onWorld: (rev) => { if (rev !== this.rev) this.reload(); },
       onWelcome: (rev) => { if (rev && this.ready && rev !== this.rev) this.reload(); },
@@ -249,23 +257,30 @@ export class Engine {
     this.torch = torch;
   }
 
-  // The sun at a time of the day (hours): low (under 20°), it is warmer and the sky gives less light.
+  // Your time of the day (hours), as the HUD shows it and the browser keeps it.
   setTime(hours) {
     const t = THREE.MathUtils.clamp(Math.round((Number(hours) || DAYTIME) * 60) / 60, SUN_TIMES.first, SUN_TIMES.last);
-    const { bearing, elevation } = sunAt(t);
-    const k = THREE.MathUtils.smoothstep(elevation, 2, 20);
     this.time = t;
-    this.setSun(bearing, elevation);
-    this.sun.color.lerpColors(LOW_SUN, HIGH_SUN, k);
-    this.sun.intensity = 1.9 + 0.7 * k;
-    this.skyLight.intensity = 1.15 * (0.7 + 0.3 * k);
-    this.fillLight.intensity = 0.35 * (0.7 + 0.3 * k);
+    this.sunTo(t);
     if (this.hud) this.hud.setSunTime(t);
     try {
       localStorage.setItem(SUN_KEY, String(t));
     } catch (e) {
       // A browser that keeps nothing starts at 10:30 again.
     }
+  }
+
+  // The sun at a time of the day (hours), yours or an AI picture's (eyes.js): low (under 20°), it is
+  // warmer and the sky gives less light. Where it is: {bearing, elevation}, degrees.
+  sunTo(hours) {
+    const { bearing, elevation } = sunAt(hours);
+    const k = THREE.MathUtils.smoothstep(elevation, 2, 20);
+    this.setSun(bearing, elevation);
+    this.sun.color.lerpColors(LOW_SUN, HIGH_SUN, k);
+    this.sun.intensity = 1.9 + 0.7 * k;
+    this.skyLight.intensity = 1.15 * (0.7 + 0.3 * k);
+    this.fillLight.intensity = 0.35 * (0.7 + 0.3 * k);
+    return { bearing, elevation };
   }
 
   // Where the sun is: its compass bearing (90 = east) and its height above the horizon, in degrees.
@@ -285,6 +300,19 @@ export class Engine {
     cam.far = 4 * r + 1200;
     cam.updateProjectionMatrix();
     this._shadowR = r;
+  }
+
+  // The sun's shadows over a place (yours each frame, or an AI picture's: eyes.js), farther round it
+  // the higher it is, snapped to whole texels so they don't shimmer.
+  shade(at, high = at.y) {
+    const wanted = Math.min(600, Math.max(120, high * 2.2));
+    if (Math.abs(wanted - this._shadowR) / this._shadowR > 0.25) this._shadowRange(wanted);
+    const r = this._shadowR;
+    const texel = (2 * r) / this.sun.shadow.mapSize.x;
+    const cx = Math.round(at.x / texel) * texel, cz = Math.round(at.z / texel) * texel;
+    this.sun.target.position.set(cx, 0, cz);
+    const sunDir = this.sunDir;
+    this.sun.position.set(cx + sunDir.x * 1500, sunDir.y * 1500, cz + sunDir.z * 1500);
   }
 
   resize() {
@@ -323,11 +351,31 @@ export class Engine {
       this.hud.say(this.hud.t("world_failed", "The world could not be loaded"));
     } finally {
       this._loadingWorld = false;
+      this._changed();
       if (this._again && !this.disposed) {
         this._again = false;
         this.reload();
       }
     }
+  }
+
+  get loadingWorld() {
+    return !!this._loadingWorld;
+  }
+
+  // Resolves the next time the place or its model changes (a new place, a model loaded or not), or
+  // at `until` (performance.now()) at the latest: what an AI's picture waits on (eyes.js).
+  changed(until) {
+    return new Promise((resolve) => {
+      this._waiters.push(resolve);
+      setTimeout(resolve, Math.max(0, until - performance.now()));
+    });
+  }
+
+  _changed() {
+    const waiting = this._waiters;
+    this._waiters = [];
+    for (const resolve of waiting) resolve();
   }
 
   _ctx() {
@@ -450,6 +498,12 @@ export class Engine {
     thing.status = "skipped";
     if (!this.replacing.has(thing.key)) thing.setNote(this.hud.t("not_loaded", "not loaded"));
     this._loadingChanged = true;
+    this._changed();
+  }
+
+  // Whether the person said to load a big model: true, false, or undefined (not asked yet).
+  bigWanted(key) {
+    return BIG.get(key);
   }
 
   _loaded(thing) {
@@ -461,6 +515,7 @@ export class Engine {
     if (thing.status === "failed") thing.setNote(this.hud.t("model_failed", "could not be loaded"));
     this._loadingChanged = true;
     this._schedule();
+    this._changed();
   }
 
   _colliders() {
@@ -468,6 +523,10 @@ export class Engine {
     for (const t of this.things.values()) for (const c of t.colliders) out.push(c);
     for (const t of this.replacing.values()) for (const c of t.colliders) out.push(c);
     return out;
+  }
+
+  pickables() {
+    return this._pickables();
   }
 
   _pickables() {
@@ -659,19 +718,13 @@ export class Engine {
     this.torch.position.z = 0.1 - this.view.back;
     this.torch.target.position.z = -1 - this.view.back;
 
-    // Shadows follow you, snapped to whole texels so they don't shimmer.
-    const r = this._shadowR;
-    const texel = (2 * r) / this.sun.shadow.mapSize.x;
-    const cx = Math.round(p.position.x / texel) * texel, cz = Math.round(p.position.z / texel) * texel;
-    this.sun.target.position.set(cx, 0, cz);
-    const sunDir = this.sunDir;
-    this.sun.position.set(cx + sunDir.x * 1500, sunDir.y * 1500, cz + sunDir.z * 1500);
-    const wanted = p.mode === FLY ? Math.min(600, Math.max(120, p.position.y * 2.2)) : 120;
-    if (Math.abs(wanted - r) / r > 0.25) this._shadowRange(wanted);
+    // Shadows follow you; after an AI's pictures, the sun goes back to your time (eyes.js).
+    this.eyes.frame();
+    this.shade(p.position, p.mode === FLY ? p.position.y : 0);
 
     this.people.frame(dt, this._t);
     this.people.send(
-      { p: [p.position.x, p.position.y, p.position.z].map((v) => Math.round(v * 1000) / 1000), yaw: Math.round(p.yaw * 1e4) / 1e4, pitch: Math.round(p.pitch * 1e4) / 1e4, mode: p.mode, moving: p.moving },
+      { p: [p.position.x, p.position.y, p.position.z].map((v) => Math.round(v * 1000) / 1000), yaw: Math.round(p.yaw * 1e4) / 1e4, pitch: Math.round(p.pitch * 1e4) / 1e4, mode: p.mode, moving: p.moving, time: this.time },
       performance.now(),
     );
 
@@ -745,6 +798,8 @@ export class Engine {
       looks,
       light: this.look.light.state(),
       time: this.time,
+      sunTime: this.eyes.time ?? this.time, // the sun's: an AI picture's for a moment after one
+      pictures: this.eyes.taken,
       people: this.peopleList.map((x) => ({ id: x.id, name: x.name, mode: x.mode, p: x.p })),
       figures: [...this.people.figures.keys()],
       connected: this.people.connected,
@@ -754,6 +809,7 @@ export class Engine {
 
   dispose() {
     this.disposed = true;
+    this._changed();
     cancelAnimationFrame(this._raf);
     this._resize.disconnect();
     this.input.dispose();

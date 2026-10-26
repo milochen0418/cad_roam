@@ -51,6 +51,10 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
 - **Call everyone** rings everyone at the model through an installed call app (DDNS Intent `call.join`), as on a Codoc in CAD model.
 - Signed in (the platform's account), you show as yourself; otherwise as a guest.
 
+**An AI looks inside** (through the AI Hub)
+- An AI working on a model (Claude Code in Codoc in CAD's AI assistant, say) can look at it from inside, as people walking in it see it: `roam.view` takes a picture from a place it names in the model's own coordinates (as its code has them), looking at a point or along a compass bearing, at a time of the day; `roam.tour` takes pictures from several places in one go; `roam.where` tells where the people in CAD Roam stand and look. With each picture come the light where the eyes are against the open sky's, how much the view is brightened there, how bright the picture is and how far the first wall ahead is. So it can walk through a building, find where it is too dark, change the code in Codoc in CAD, build it and look again.
+- The pictures are taken by a CAD Roam page open on the model (a browser draws them, with its graphics card): any tab, also one in the background, those drawing with *Best (shadows)* first. Its person keeps their own view; for a moment their light follows the picture's time of day, and a note says an AI took a picture. With nobody on the model, the AI is told which page to ask for.
+
 ## 📐 How it works
 
 ```
@@ -77,6 +81,7 @@ Built with [Reflex](https://reflex.dev/) and [three.js](https://threejs.org/) fo
 - **From behind** (`assets/roam/view.js`). The camera goes back from a point above your eyes, the way you look; a ray through the same bounding-volume trees finds the first thing in the way (another one straight up, a low ceiling), and the camera stops 25 cm short of it, at once, then goes back out smoothly when the way is clear. The torch shines from you, not from the camera. Your figure is the one the others see of you (`people.js`).
 - **Coordinates.** A model's Z is up and its front is -Y (Codoc in CAD's "Front" view); you arrive facing its front, and it stands on the ground at its own z = 0, scaled by its unit.
 - **Presence.** A tab enters a model's place from its Reflex page (so the person comes from the sign-in, not from the browser), then its 3D view opens the model's socket with the tab's id and Reflex token; poses go out about ten times a second while you move. A closed tab leaves at once.
+- **Pictures for an AI** (`cad_roam/ai_tools.py`, `cad_roam/eyes.py`, `assets/roam/eyes.js`). The tools turn the AI's place (the model's coordinates) into the view's, and ask the best tab on the model for a picture over its people socket. The tab loads the newest build if it hasn't, works out the light for that time at once (a tab in the background draws no frames, so nothing waits for one), draws the view on its own canvas at 1280 x 800 and reads it back in the same moment, so its own view never shows it, and sends a JPEG back.
 - **Watching.** Every 2 s the backend stats the manifests of the models people are in; a change rebuilds the place and tells everyone in it to fetch it again. The place's version changes only when something that shows changed, so typing in Codoc in CAD (which saves the code every 1.5 s) doesn't make anyone reload.
 
 ## 🚀 Install on re-ddns (Agentic App Store)
@@ -105,7 +110,7 @@ Open `http://localhost:3000`. On a Mac it reads the same shared folder the local
 ## 🧪 Tests
 
 ```bash
-poetry run pytest                              # 34 unit tests: units, meshes and GLBs, models, links, presence, routes
+poetry run pytest                              # 48 unit tests: units, meshes and GLBs, models, links, presence, routes, an AI's pictures
 poetry run ./run_test_suite.sh smoke_home      # E2E (Playwright), see testcases/README.md
 ```
 

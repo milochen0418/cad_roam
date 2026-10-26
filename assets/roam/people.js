@@ -1,7 +1,8 @@
 // The others in the world: the socket that carries where everyone is (cad_roam/presence.py), and
 // their figures: someone walking is a figure in their colour, someone flying is a small drone,
 // each with their name over it (seen from behind, yours is drawn the same way: view.js).
-// Positions arrive about ten times a second and are eased in.
+// Positions arrive about ten times a second and are eased in. The socket also brings an AI's
+// requests for a picture (onShoot, eyes.js) and takes the answers back.
 
 import * as THREE from "three";
 import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
@@ -122,11 +123,13 @@ class Figure {
 }
 
 export class People {
-  constructor({ scene, look, wsUrl, peer, onRejoin, onWorld, onChange, onWelcome }) {
+  constructor({ scene, look, wsUrl, peer, quality, onShoot, onRejoin, onWorld, onChange, onWelcome }) {
     this.scene = scene;
     this.look = look;
     this.wsUrl = wsUrl;
     this.peer = peer;
+    this.quality = quality;
+    this.onShoot = onShoot;
     this.onRejoin = onRejoin;
     this.onWorld = onWorld;
     this.onChange = onChange;
@@ -138,6 +141,11 @@ export class People {
     this._last = "";
     this._retry = 0;
     this._closed = false;
+    // Whether this tab is on a screen: an AI's pictures are asked of such a tab first.
+    this._seen = () => {
+      if (this.connected && this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify({ t: "seen", visible: !document.hidden }));
+    };
+    document.addEventListener("visibilitychange", this._seen);
     // A moment later: React's development double mount disposes the first view at once.
     this._timer = setTimeout(() => this._connect(), 30);
   }
@@ -155,7 +163,7 @@ export class People {
     ws.onopen = () => {
       let token = "";
       try { token = window.sessionStorage.getItem("token") || ""; } catch (e) { /* storage blocked */ }
-      ws.send(JSON.stringify({ t: "hello", peer: this.peer, token }));
+      ws.send(JSON.stringify({ t: "hello", peer: this.peer, token, visible: !document.hidden, quality: this.quality }));
     };
     ws.onmessage = (ev) => {
       let m;
@@ -178,6 +186,11 @@ export class People {
         if (p) Object.assign(p, { p: m.p, yaw: m.yaw, pitch: m.pitch, mode: m.mode });
       } else if (m.t === "world") {
         this.onWorld(m.rev);
+      } else if (m.t === "shoot" && this.onShoot) {
+        // The answer goes back on this socket (the server knows the request by it).
+        this.onShoot(m).then((answer) => {
+          if (ws.readyState === 1) ws.send(JSON.stringify({ ...answer, t: "shot", id: m.id }));
+        });
       }
     };
     ws.onclose = () => {
@@ -244,6 +257,7 @@ export class People {
   dispose() {
     this._closed = true;
     clearTimeout(this._timer);
+    document.removeEventListener("visibilitychange", this._seen);
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();

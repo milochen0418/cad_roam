@@ -81,7 +81,16 @@ const ADAPT_EVERY = 0.25;
 // Light arrives smoothly: a new model's light fades in over this many seconds.
 const FADE_TIME = 0.6;
 
-const pause = () => new Promise((resolve) => setTimeout(resolve, 0));
+// Gives way to the page for a moment. A message the page sends itself, not a timer: in a tab in the
+// background timers wait a second (a minute, after a while), and an AI's picture (eyes.js) may need
+// the light worked out there.
+const waiting = [];
+const channel = new MessageChannel();
+channel.port1.onmessage = () => waiting.shift()?.();
+export const pause = () => new Promise((resolve) => {
+  waiting.push(resolve);
+  channel.port2.postMessage(0);
+});
 
 // Directions spread evenly over the sphere (a Fibonacci spiral): as many point up as down, and
 // they add up a sky's light on a floor (pi) exactly.
@@ -835,9 +844,23 @@ export class Light {
       return;
     }
     this._t += dt;
-    if (this.dirty && !this.making) this._make();
+    if (this.dirty && !this.making) this._job = this._make();
     const grid = this.next || this.grid;
     if (grid) this._work(grid);
+    const shown = this._show();
+    const want = shown && this.wanted;
+    this.on = THREE.MathUtils.clamp(this.on + (want ? 1 : -1) * (dt / FADE_TIME), 0, 1);
+    this.uniforms.roamGridOn.value = this.on;
+    if (!this.on && this.grid && !this.wanted) {
+      this.grid.dispose();
+      this.grid = null;
+    }
+    this._adapt(camera, dt, this.on > 0 ? shown : null);
+  }
+
+  // The grid that lights the picture (a new one once its first round is done): its last finished
+  // round, for the surfaces. Null before there is one.
+  _show() {
     if (this.next && this.next.shown >= 0) {
       if (this.grid) this.grid.dispose();
       this.grid = this.next;
@@ -855,14 +878,31 @@ export class Light {
       shown.box.getSize(u.roamGridSize.value);
       u.roamGridCell.value = shown.spec.cell;
     }
-    const want = shown && this.wanted;
-    this.on = THREE.MathUtils.clamp(this.on + (want ? 1 : -1) * (dt / FADE_TIME), 0, 1);
-    u.roamGridOn.value = this.on;
-    if (!this.on && this.grid && !this.wanted) {
-      this.grid.dispose();
-      this.grid = null;
+    return shown;
+  }
+
+  // Everything the light still has to work out for the sun as it is now, done at once, for an AI's
+  // picture (eyes.js): a tab in the background draws no frames, so there none of it was done. Gives
+  // way to the page between rounds. False when there is no light inside to work out (Fast, or no
+  // model big enough to have an inside).
+  async settle() {
+    if (!(this.able && this.look.shadows)) return false;
+    for (let tries = 0; (this.dirty || this.making) && tries < 5; tries++) {
+      if (!this.making) this._job = this._make();
+      await this._job;
     }
-    this._adapt(camera, dt, this.on > 0 ? shown : null);
+    const grid = this.next || this.grid;
+    if (!grid || !this.wanted) return false;
+    this._work(grid, true);
+    while (grid.rounds < ROUNDS) {
+      this._work(grid, true);
+      if (grid.layer === 0) await pause(); // a round done
+      if (this.disposed || (this.next || this.grid) !== grid) return false;
+    }
+    this._show();
+    this.on = 1;
+    this.uniforms.roamGridOn.value = 1;
+    return true;
   }
 
   // Adds up the surfaces into a new grid (in the background, see voxelize). With nothing to light
@@ -903,9 +943,11 @@ export class Light {
       sun.color.getHexString() + sky.color.getHexString() + sky.groundColor.getHexString() + fill.color.getHexString();
   }
 
-  _work(grid) {
+  // The next cells of the round being worked out; `now`: a sun that moved is taken at once, not
+  // only a quarter of a second after it last did (while it is dragged).
+  _work(grid, now = false) {
     const key = this._daylight();
-    if (key !== grid.lightKey && (this._t - grid.lit > 0.25 || !grid.lightKey)) {
+    if (key !== grid.lightKey && (now || this._t - grid.lit > 0.25 || !grid.lightKey)) {
       // The sun moved (or the grid is new): its light in the cells again, and the rounds again
       // from the light they have (it is near what it will be).
       grid.lightKey = key;
@@ -1050,34 +1092,56 @@ export class Light {
     if (!grid) this.adaptTo = 1;
     else if (camera && !this._eyeBusy && this._t - this._eyeAt >= ADAPT_EVERY) {
       this._eyeAt = this._t;
-      const at = camera.getWorldPosition(this._v).sub(grid.box.min).divide(grid.box.getSize(new THREE.Vector3()));
-      if (at.x < 0 || at.y < 0 || at.z < 0 || at.x > 1 || at.y > 1 || at.z > 1) {
+      if (!this._probe(grid, camera.getWorldPosition(this._v))) {
         this.adaptTo = 1;
       } else {
-        const m = this.eyeMaterial, u = m.uniforms, set = grid.sets[grid.shown].textures;
-        u.gridR.value = set[0];
-        u.gridG.value = set[1];
-        u.gridB.value = set[2];
-        u.gridV.value = set[3];
-        u.sun.value = grid.sun.texture;
-        u.at.value.copy(at);
-        this._into(() => {
-          this.quad.material = m;
-          this.renderer.setRenderTarget(this.eyeTarget);
-          this.renderer.render(this.quadScene, this.quadCamera);
-        });
         this._eyeBusy = true;
         this.renderer.readRenderTargetPixelsAsync(this.eyeTarget, 0, 0, 1, 1, this.eyePixel)
-          .then((px) => {
-            const here = 2 ** ((px[0] / 255) * 24 - 12), sure = px[1] / 255;
-            this.adaptTo = sure < 0.05 ? 1 : THREE.MathUtils.clamp((this._outdoors() / here) ** ADAPT_POWER, 1, ADAPT_MAX);
-          })
+          .then((px) => { this.adaptTo = this._eyes(px).brightness; })
           .catch(() => { this.adaptTo = 1; })
           .finally(() => { this._eyeBusy = false; });
       }
     }
     const want = this.on > 0 ? 1 + (this.adaptTo - 1) * this.on : 1;
     this.brightness *= (want / this.brightness) ** (1 - Math.exp(-dt / ADAPT_TIME));
+  }
+
+  // The light where `position` (world) is, drawn into the 1 x 1 eye target; false outside the grid.
+  _probe(grid, position) {
+    const at = position.clone().sub(grid.box.min).divide(grid.box.getSize(new THREE.Vector3()));
+    if (at.x < 0 || at.y < 0 || at.z < 0 || at.x > 1 || at.y > 1 || at.z > 1) return false;
+    const m = this.eyeMaterial, u = m.uniforms, set = grid.sets[grid.shown].textures;
+    u.gridR.value = set[0];
+    u.gridG.value = set[1];
+    u.gridB.value = set[2];
+    u.gridV.value = set[3];
+    u.sun.value = grid.sun.texture;
+    u.at.value.copy(at);
+    this._into(() => {
+      this.quad.material = m;
+      this.renderer.setRenderTarget(this.eyeTarget);
+      this.renderer.render(this.quadScene, this.quadCamera);
+    });
+    return true;
+  }
+
+  // What the eye target says: how many times brighter the view is drawn there (1 where it can't
+  // tell), and the light there against the open sky's (null then).
+  _eyes(px) {
+    const here = 2 ** ((px[0] / 255) * 24 - 12), sure = px[1] / 255;
+    if (sure < 0.05) return { brightness: 1, light: null };
+    const light = here / this._outdoors();
+    return { brightness: THREE.MathUtils.clamp((1 / light) ** ADAPT_POWER, 1, ADAPT_MAX), light };
+  }
+
+  // The same at once, at `position` (world), for an AI's picture (eyes.js): its brightness is what
+  // the view eases to there.
+  eyeAt(position) {
+    const grid = this.on > 0 && this.grid && this.grid.shown >= 0 ? this.grid : null;
+    if (!grid || !this._probe(grid, position)) return { brightness: 1, light: null };
+    const px = new Uint8Array(4);
+    this.renderer.readRenderTargetPixels(this.eyeTarget, 0, 0, 1, 1, px);
+    return this._eyes(px);
   }
 
   // The light out in the open, sky and sun, on everything round (as where you stand is measured:

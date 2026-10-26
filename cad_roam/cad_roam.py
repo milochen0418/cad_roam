@@ -3,7 +3,8 @@
 Pages: ``/`` lists the models of the shared collection ``cad-models`` (Codoc in CAD's models);
 ``/room/<id>`` is one of them as a place (the same id as its room in Codoc in CAD). Everyone at a
 model sees the others walking or flying, and can call everyone. The 3D view is
-``assets/roam/``; its data comes from the backend's own routes (:mod:`cad_roam.api`).
+``assets/roam/``; its data comes from the backend's own routes (:mod:`cad_roam.api`). An AI looks
+at a model from inside through the AI Hub (:mod:`cad_roam.ai_tools`).
 """
 
 import reflex as rx
@@ -12,6 +13,10 @@ try:
     from reflex_ddns_auth.intent import install_intent_host, intent
 except ImportError:  # a standalone CAD Roam, without the DDNS libraries
     install_intent_host = intent = None
+try:
+    from cad_roam import ai_tools
+except ImportError:  # a DDNS library without tools
+    ai_tools = None
 
 from cad_roam.api import api, lifespan
 from cad_roam.components.home import home_page
@@ -63,3 +68,7 @@ if intent is not None:
     @intent(app, action="cad-roam.open", on_open=OpenState.open_ref, accepts=("cad.build123d",), title="Walk in CAD Roam")
     def open_in_cad_roam():
         return rx.el.div("CAD Roam…", class_name="p-6 text-sm text-slate-500")
+
+# An AI looks from inside a model (pictures taken by the pages open on it).
+if ai_tools is not None:
+    ai_tools.register(app)
